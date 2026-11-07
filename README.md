@@ -115,6 +115,9 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 - **"Sign in to confirm you're not a bot"** in the logs. YouTube blocks many datacenter and VPN
   IPs. Run the addon on a home connection, or export YouTube cookies from a browser to
   `./data/cookies.txt` and set `YTDLP_COOKIES=/data/cookies.txt`.
+- **`HTTP Error 429` on subtitles.** YouTube often limits translated subtitles. The addon retries,
+  falls back to the next Norwegian track, and if YouTube still refuses, plays the trailer without
+  subtitles and builds it again with subtitles 30 minutes later.
 - **No subtitles on a trailer.** The video has no captions at all (music-only trailers), or you have turned off
   auto-generated subtitles. The trailer still plays. The logs say which track was used.
 - **The first play doesn't start on Apple devices.** AVPlayer insists on byte ranges, which a trailer still being made

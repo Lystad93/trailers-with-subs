@@ -126,7 +126,13 @@ export function pickFormats(info, { maxHeight = 1080, codec = 'h264', burn = fal
   const formats = Array.isArray(info?.formats) ? info.formats.filter((f) => f && f.format_id && plainHttp(f)) : [];
   const inLimit = (f) => (f.height || 0) <= maxHeight;
 
-  let videos = formats.filter((f) => hasVideo(f) && !hasAudio(f) && f.height && inLimit(f));
+  const allVideos = formats.filter((f) => hasVideo(f) && !hasAudio(f) && f.height);
+  let videos = allVideos.filter(inLimit);
+  if (!videos.length && allVideos.length) {
+    // Nothing that small: take the smallest there is.
+    const smallest = Math.min(...allVideos.map((f) => f.height));
+    videos = allVideos.filter((f) => f.height === smallest);
+  }
   if (codec === 'h264') {
     const h264 = videos.filter((f) => codecFamily(f.vcodec) === 'h264');
     if (h264.length) videos = h264;
@@ -179,26 +185,32 @@ export function pickFormats(info, { maxHeight = 1080, codec = 'h264', burn = fal
  * 2. YouTube's translation of human-made subtitles, e.g. "no-en" (English → Norwegian)
  * 3. YouTube's translation of the auto-generated captions ("no")
  */
-export function pickSubtitle(info, { auto = true } = {}) {
+export function subtitleCandidates(info, { auto = true } = {}) {
   const manual = Object.keys(info?.subtitles || {}).filter((k) => k !== 'live_chat');
   const automatic = Object.keys(info?.automatic_captions || {});
   const rankNo = (k) => (/^nb/i.test(k) ? 0 : /^no/i.test(k) ? 1 : 2); // Bokmål before Nynorsk
-
-  const own = manual.filter((k) => NORWEGIAN.test(k)).sort((a, b) => rankNo(a) - rankNo(b));
-  if (own.length) return { key: own[0], kind: 'manual' };
-  if (!auto) return null;
+  const out = manual
+    .filter((k) => NORWEGIAN.test(k))
+    .sort((a, b) => rankNo(a) - rankNo(b))
+    .map((key) => ({ key, kind: 'manual' }));
+  if (!auto) return out;
 
   // "no-en", "nb-en-US": translations of a manual track. Prefer one made from English.
-  const translated = automatic
+  automatic
     .filter((k) => /^(no|nb)-/i.test(k) && !/-orig$/i.test(k))
     .filter((k) => manual.includes(k.replace(/^(no|nb)-/i, '')))
-    .sort((a, b) => Number(/^(no|nb)-en/i.test(b)) - Number(/^(no|nb)-en/i.test(a)) || rankNo(a) - rankNo(b));
-  if (translated.length) return { key: translated[0], kind: 'translated' };
+    .sort((a, b) => Number(/^(no|nb)-en/i.test(b)) - Number(/^(no|nb)-en/i.test(a)) || rankNo(a) - rankNo(b))
+    .forEach((key) => out.push({ key, kind: 'translated' }));
 
   const asr = ['no', 'nb'].find((k) => automatic.includes(k));
-  if (asr) return { key: asr, kind: 'auto' };
+  if (asr) out.push({ key: asr, kind: 'auto' });
   // The video's own language is Norwegian (auto-generated captions, not a translation).
   const orig = ['no-orig', 'nb-orig'].find((k) => automatic.includes(k));
-  if (orig) return { key: orig, kind: 'auto' };
-  return null;
+  if (orig) out.push({ key: orig, kind: 'auto' });
+  return out;
+}
+
+// The best Norwegian subtitle track (see subtitleCandidates for the order).
+export function pickSubtitle(info, options) {
+  return subtitleCandidates(info, options)[0] || null;
 }

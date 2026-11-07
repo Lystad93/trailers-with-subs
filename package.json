@@ -1,6 +1,6 @@
 {
   "name": "trailers-with-subs",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Stremio/AIOMetadata trailer addon: Norwegian dubbed trailers and English trailers with Norwegian subtitles, in the best quality YouTube has.",
   "type": "module",
   "main": "src/server.js",

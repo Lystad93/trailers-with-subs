@@ -182,3 +182,65 @@ test('signatures depend on video and profile', () => {
   assert.equal(media.sign('abcdefghijk', 'no.1080.h264'), media.sign('abcdefghijk', 'no.1080.h264'));
   assert.notEqual(media.sign('abcdefghijk', 'no.1080.h264'), media.sign('abcdefghijk', 'no.720.h264'));
 });
+
+// Plays a trailer through handlePlay with the given subtitle fetcher and waits for the cache.
+async function playOnce(videoId, profileStr, fetchSubtitle) {
+  const d = { ...deps, fetchSubtitle, subtitleRetryMs: 50 };
+  const srv = http.createServer((req, res) => media.handlePlay(req, res, videoId, profileStr, parseProfile(profileStr), d));
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const res = await get(`http://127.0.0.1:${srv.address().port}/`);
+  srv.close();
+  const key = media.cacheKey(videoId, profileStr);
+  for (let i = 0; i < 100 && (media.getJob(key) || !fs.existsSync(media.finalPath(key))); i++) await new Promise((r) => setTimeout(r, 100));
+  return { res, key };
+}
+
+const subTypes = (file) => probe(file).streams.map((s) => s.codec_type);
+const rateLimited = () => {
+  throw new Error("yt-dlp exited 1: ERROR: Unable to download video subtitles for 'no-en': HTTP Error 429: Too Many Requests");
+};
+
+test('a 429 on subtitles is retried, then the next Norwegian track is tried', { skip: !hasFfmpeg }, async () => {
+  const tried = [];
+  const { key } = await playOnce('rrrrrrrrrrr', 'sub.720.h264.soft.a', async (_p, k) => {
+    tried.push(k);
+    if (k === 'no-en') rateLimited();
+    return VTT;
+  });
+  assert.deepEqual(tried, ['no-en', 'no-en', 'no']);
+  assert.deepEqual(subTypes(media.finalPath(key)), ['video', 'audio', 'subtitle']);
+});
+
+test('when YouTube keeps refusing subtitles, the trailer plays without and is rebuilt later', { skip: !hasFfmpeg }, async () => {
+  const profileStr = 'sub.480.h264.soft.a';
+  const { res, key } = await playOnce('ttttttttttt', profileStr, async () => rateLimited());
+  assert.equal(res.status, 200, res.body.toString());
+  const file = media.finalPath(key);
+  assert.deepEqual(subTypes(file), ['video', 'audio']);
+  const marker = file.replace(/\.mp4$/, '.retry-subs');
+  assert.ok(fs.existsSync(marker));
+
+  // Within 30 minutes the cached file is served as is.
+  let asked = 0;
+  await playOnce('ttttttttttt', profileStr, async () => {
+    asked++;
+    return VTT;
+  });
+  assert.equal(asked, 0);
+
+  // After that, the next viewer triggers a rebuild that now gets the subtitles.
+  fs.writeFileSync(marker, String(Date.now() - 31 * 60 * 1000));
+  const before = fs.statSync(file).mtimeMs;
+  await playOnce('ttttttttttt', profileStr, async () => VTT);
+  for (let i = 0; i < 100 && fs.existsSync(marker); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.ok(fs.statSync(file).mtimeMs > before);
+  assert.deepEqual(subTypes(file), ['video', 'audio', 'subtitle']);
+  assert.equal(fs.existsSync(marker), false);
+});
+
+test('a subtitle problem that is not temporary is final', { skip: !hasFfmpeg }, async () => {
+  const { key } = await playOnce('uuuuuuuuuuu', 'sub.720.h264.soft.a', async () => {
+    throw new Error('yt-dlp exited 1: ERROR: no such subtitle');
+  });
+  assert.equal(fs.existsSync(media.finalPath(key).replace(/\.mp4$/, '.retry-subs')), false);
+});

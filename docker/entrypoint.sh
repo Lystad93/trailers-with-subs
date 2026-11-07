@@ -11,7 +11,7 @@ fi
 
 if [ "${YTDLP_AUTO_UPDATE:-1}" = "1" ]; then
   echo "Updating yt-dlp..."
-  "$YTDLP_VENV/bin/pip" install --no-cache-dir -q -U "yt-dlp[default]" || echo "yt-dlp update failed, using the installed version"
+  "$YTDLP_VENV/bin/pip" install --no-cache-dir -q -U "yt-dlp[default,curl-cffi]" || echo "yt-dlp update failed, using the installed version"
 fi
 echo "yt-dlp $(yt-dlp --version)"
 exec "$@"

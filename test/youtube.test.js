@@ -48,6 +48,10 @@ test('max height is respected', () => {
   assert.equal(pickFormats(info, { maxHeight: 1080, codec: 'any', burn: true }).video.format_id, '137');
 });
 
+test('when nothing fits under the limit, the smallest video is used', () => {
+  assert.equal(pickFormats(info, { maxHeight: 480, codec: 'h264' }).video.format_id, '137');
+});
+
 test('Norwegian audio track is chosen for dubbed mode when present', () => {
   const p = pickFormats(info, { maxHeight: 1080, audioLang: /^(no|nb|nn)/ });
   assert.equal(p.audio.format_id, '140-1');

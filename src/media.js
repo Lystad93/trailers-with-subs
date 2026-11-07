@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { env, log } from './env.js';
-import { getInfo, pickFormats, pickSubtitle, runYtdlp, baseArgs, BOT_CHECK, botCheckHint } from './youtube.js';
+import { getInfo, pickFormats, subtitleCandidates, runYtdlp, baseArgs, BOT_CHECK, botCheckHint } from './youtube.js';
 import { vttToSrt } from './subtitles.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -61,6 +61,18 @@ function release() {
 
 export const cacheKey = (videoId, profile) => `${videoId}_${profile.replace(/[^A-Za-z0-9]+/g, '-')}`;
 export const finalPath = (key) => path.join(env.cacheDir, `${key}.mp4`);
+// Marks a trailer built without subtitles because YouTube refused them for the moment.
+const retryMarker = (key) => path.join(env.cacheDir, `${key}.retry-subs`);
+const SUBS_RETRY_MS = 30 * 60 * 1000;
+
+async function needsRebuild(key) {
+  try {
+    const since = Number(await fsp.readFile(retryMarker(key), 'utf8'));
+    return Date.now() - since > SUBS_RETRY_MS;
+  } catch {
+    return false;
+  }
+}
 
 export function getJob(key) {
   return jobs.get(key);
@@ -95,7 +107,7 @@ export function startJob(videoId, profileStr, profile, deps = {}) {
     const workDir = path.join(env.cacheDir, 'work', `${key}-${Date.now()}`);
     try {
       await fsp.mkdir(workDir, { recursive: true });
-      const out = await buildVideo(videoId, profile, workDir, {
+      const { outPath: out, retrySubs } = await buildVideo(videoId, profile, workDir, {
         ...deps,
         onPart: (p) => {
           job.partPath = p;
@@ -110,7 +122,9 @@ export function startJob(videoId, profileStr, profile, deps = {}) {
       job.encodeFinished = true;
       job.notify();
       await fsp.rename(out, finalPath(key));
-      log.info(`ready: ${key}`);
+      if (retrySubs) await fsp.writeFile(retryMarker(key), String(Date.now()));
+      else await fsp.rm(retryMarker(key), { force: true });
+      log.info(`ready: ${key}${retrySubs ? ' (without subtitles for now; tries again in 30 minutes)' : ''}`);
       return finalPath(key);
     } catch (err) {
       failures.set(key, { at: Date.now(), error: err });
@@ -201,7 +215,10 @@ async function defaultFetchSubtitle(infoPath, subKey, workDir) {
     { timeoutMs: 60000 }
   );
   const file = (await fsp.readdir(workDir)).find((f) => f.startsWith('sub.') && f.endsWith('.vtt'));
-  return file ? fsp.readFile(path.join(workDir, file), 'utf8') : null;
+  if (!file) return null;
+  const text = await fsp.readFile(path.join(workDir, file), 'utf8');
+  await fsp.rm(path.join(workDir, file), { force: true });
+  return text;
 }
 
 export async function buildVideo(videoId, profile, workDir, deps = {}) {
@@ -226,22 +243,12 @@ export async function buildVideo(videoId, profile, workDir, deps = {}) {
   if (!picked) throw new Error('no playable formats');
 
   let srtPath = null;
+  let subsTransient = false;
   if (withSubs) {
-    const choice = pickSubtitle(info, { auto: profile.auto });
-    if (choice) {
-      try {
-        const vtt = await fetchSubtitle(infoPath, choice.key, workDir);
-        const { srt, count } = vttToSrt(vtt || '');
-        if (count > 0) {
-          srtPath = path.join(workDir, 'sub.srt');
-          await fsp.writeFile(srtPath, srt);
-          log.info(`${videoId}: Norwegian subtitles "${choice.key}" (${choice.kind}, ${count} lines)`);
-        }
-      } catch (err) {
-        log.warn(`${videoId}: subtitles "${choice.key}" failed: ${err.message}`);
-      }
-    }
-    if (!srtPath) log.warn(`${videoId}: no Norwegian subtitles found, playing without`);
+    const result = await fetchNorwegianSubtitles(videoId, info, profile, infoPath, workDir, fetchSubtitle, deps.subtitleRetryMs);
+    srtPath = result.srtPath;
+    subsTransient = result.transient;
+    if (!srtPath) log.warn(`${videoId}: no Norwegian subtitles${subsTransient ? ' this time (YouTube refused for now)' : ' found'}, playing without`);
   }
   if (!srtPath) burn = false;
 
@@ -328,7 +335,36 @@ export async function buildVideo(videoId, profile, workDir, deps = {}) {
   if (softSubs) remux.push('-disposition:s:0', 'default+forced');
   remux.push('-movflags', '+faststart', '-f', 'mp4', outPath);
   await waitExit(spawn(env.ffmpeg, remux, { stdio: ['ignore', 'ignore', 'pipe'] }), 'ffmpeg remux');
-  return outPath;
+  return { outPath, retrySubs: withSubs && !srtPath && subsTransient };
+}
+
+const TRANSIENT = /HTTP Error (429|5\d\d)|timed out|Connection|Temporary failure|reset by peer/i;
+
+// Tries the Norwegian tracks best first. YouTube often answers 429 for translated subtitles,
+// so wait and retry once, and move on to the next track; give up after about 25 seconds.
+async function fetchNorwegianSubtitles(videoId, info, profile, infoPath, workDir, fetchSubtitle, retryMs = 5000) {
+  const deadline = Date.now() + 25000;
+  let transient = false;
+  for (const choice of subtitleCandidates(info, { auto: profile.auto })) {
+    for (let attempt = 1; attempt <= 2 && Date.now() < deadline; attempt++) {
+      try {
+        const vtt = await fetchSubtitle(infoPath, choice.key, workDir);
+        const { srt, count } = vttToSrt(vtt || '');
+        if (count === 0) break; // empty track: try the next one
+        const srtPath = path.join(workDir, 'sub.srt');
+        await fsp.writeFile(srtPath, srt);
+        log.info(`${videoId}: Norwegian subtitles "${choice.key}" (${choice.kind}, ${count} lines)`);
+        return { srtPath, transient: false };
+      } catch (err) {
+        const isTransient = TRANSIENT.test(err.message);
+        transient ||= isTransient;
+        log.warn(`${videoId}: subtitles "${choice.key}" failed: ${err.message.split('\n')[0]}`);
+        if (!isTransient) break;
+        if (attempt === 1 && Date.now() + retryMs < deadline) await new Promise((r) => setTimeout(r, retryMs));
+      }
+    }
+  }
+  return { srtPath: null, transient };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -347,6 +383,7 @@ export async function enforceCacheLimit() {
   for (const e of entries) {
     if (total <= env.cacheMaxBytes) break;
     await fsp.rm(e.p, { force: true });
+    await fsp.rm(e.p.replace(/\.mp4$/, '.retry-subs'), { force: true });
     total -= e.size;
     log.info(`cache: evicted ${path.basename(e.p)}`);
   }
@@ -449,7 +486,9 @@ export async function serveGrowing(req, res, job) {
 export async function handlePlay(req, res, videoId, profileStr, profile, deps) {
   const key = cacheKey(videoId, profileStr);
   const file = finalPath(key);
-  if (fs.existsSync(file)) return serveFile(req, res, file);
+  // A trailer built without subtitles because YouTube refused them is rebuilt after a while;
+  // the old file stays until the new one replaces it.
+  if (fs.existsSync(file) && !getJob(key) && !(await needsRebuild(key))) return serveFile(req, res, file);
 
   const job = startJob(videoId, profileStr, profile, deps);
   const range = req.headers.range ? /^bytes=(\d+)-/.exec(req.headers.range) : null;
@@ -466,6 +505,7 @@ export async function handlePlay(req, res, videoId, profileStr, profile, deps) {
     await job.done;
     return serveFile(req, res, file);
   } catch (err) {
+    if (!res.headersSent && fs.existsSync(file)) return serveFile(req, res, file);
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'text/plain' });
       res.end(`Could not prepare trailer: ${err.message}`);

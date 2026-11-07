@@ -8,7 +8,7 @@ RUN apt-get update \
 # yt-dlp in its own venv so it can update itself at start-up (YouTube changes often).
 ENV YTDLP_VENV=/opt/yt-dlp
 RUN python3 -m venv $YTDLP_VENV \
- && $YTDLP_VENV/bin/pip install --no-cache-dir "yt-dlp[default]" \
+ && $YTDLP_VENV/bin/pip install --no-cache-dir "yt-dlp[default,curl-cffi]" \
  && ln -s $YTDLP_VENV/bin/yt-dlp /usr/local/bin/yt-dlp \
  && chown -R node:node $YTDLP_VENV
 
