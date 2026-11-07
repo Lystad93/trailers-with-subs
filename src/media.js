@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { env, log } from './env.js';
-import { getInfo, pickFormats, pickSubtitle, runYtdlp, baseArgs } from './youtube.js';
+import { getInfo, pickFormats, pickSubtitle, runYtdlp, baseArgs, BOT_CHECK, botCheckHint } from './youtube.js';
 import { vttToSrt } from './subtitles.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -118,7 +118,12 @@ export function startJob(videoId, profileStr, profile, deps = {}) {
       job.failed = err;
       job.encodeFinished = true;
       job.notify();
-      log.error(`job ${key} failed: ${err.message}`);
+      if (BOT_CHECK.test(err.message)) {
+        log.error(`job ${key} failed: YouTube bot check`);
+        botCheckHint('playing a trailer');
+      } else {
+        log.error(`job ${key} failed: ${err.message}`);
+      }
       throw err;
     } finally {
       release();

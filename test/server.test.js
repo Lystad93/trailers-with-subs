@@ -35,6 +35,9 @@ globalThis.fetch = async (url, opts) => {
       },
     },
   };
+  if (u.pathname === '/3/find/tt9999999') {
+    return { ok: false, status: 503, headers: { get: (k) => (k === 'retry-after' ? '0.01' : null) }, json: async () => ({}) };
+  }
   const body = routes[u.pathname];
   return { ok: Boolean(body), status: body ? 200 : 404, json: async () => body };
 };
@@ -104,6 +107,13 @@ test('unknown titles and bad input give empty lists, not errors', async () => {
   assert.deepEqual(await (await fetch(`${base}/stream/channel/tt1160419.json`)).json(), { streams: [] });
   assert.equal((await fetch(`${base}/!!!/manifest.json`)).status, 400);
   assert.equal((await fetch(`${base}/play/short/no.1080.h264/x.mp4`)).status, 403);
+});
+
+test('when TMDB keeps failing, answer with an error so AIOMetadata asks again later', async () => {
+  const res = await fetch(`${base}/stream/movie/tt9999999.json`);
+  assert.equal(res.status, 503);
+  assert.equal(res.headers.get('retry-after'), '60');
+  assert.deepEqual((await res.json()).streams, []);
 });
 
 test('configure page renders with the settings filled in', async () => {

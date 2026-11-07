@@ -55,6 +55,11 @@ export const env = {
   subFontSize: num(process.env.SUB_FONT_SIZE, 18),
   // How long a stream request may wait for the YouTube search fallback (AIOMetadata gives up after 6s).
   searchBudgetMs: num(process.env.SEARCH_BUDGET_MS, 3500),
+  // YouTube searches allowed to wait in line; more are skipped (catalog warm-ups ask about hundreds of titles).
+  searchQueueMax: num(process.env.SEARCH_QUEUE_MAX, 5),
+  // TMDB is shared with AIOMetadata on the same IP, so stay well under its ~50 requests/second.
+  tmdbRps: Math.max(1, num(process.env.TMDB_RPS, 20)),
+  tmdbConcurrency: Math.max(1, num(process.env.TMDB_CONCURRENCY, 6)),
   logLevel: process.env.LOG_LEVEL || 'info',
 };
 
@@ -69,3 +74,17 @@ export const log = Object.fromEntries(
     },
   ])
 );
+
+// Logs a message at most once per interval per key, with a count of what was held back.
+const throttled = new Map();
+export function logThrottled(key, intervalMs, level, message) {
+  const now = Date.now();
+  const entry = throttled.get(key);
+  if (entry && now - entry.at < intervalMs) {
+    entry.suppressed++;
+    return;
+  }
+  const extra = entry?.suppressed ? ` (${entry.suppressed} similar messages hidden)` : '';
+  throttled.set(key, { at: now, suppressed: 0 });
+  log[level](message + extra);
+}

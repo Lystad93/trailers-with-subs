@@ -1,4 +1,5 @@
 import { Memo } from './memo.js';
+import { env, logThrottled } from './env.js';
 
 const API = 'https://api.themoviedb.org/3';
 const memo = new Memo({ max: 10000 });
@@ -6,7 +7,55 @@ const DAY = 24 * 60 * 60 * 1000;
 
 export class TmdbError extends Error {}
 
-export async function tmdbGet(path, params, key, fetchImpl = fetch) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// All TMDB requests go through one queue: a few at a time, at a steady rate, and everyone waits
+// when TMDB says slow down. Catalog warm-ups ask about hundreds of titles in one go.
+export function createLimiter({ concurrency, perSecond }) {
+  let active = 0;
+  let nextStart = 0;
+  let pausedUntil = 0;
+  const waiting = [];
+  const pump = () => {
+    while (active < concurrency && waiting.length) {
+      active++;
+      waiting.shift()();
+    }
+  };
+  return {
+    pause(ms) {
+      pausedUntil = Math.max(pausedUntil, Date.now() + ms);
+    },
+    get queued() {
+      return waiting.length;
+    },
+    async run(fn) {
+      await new Promise((resolve) => {
+        waiting.push(resolve);
+        pump();
+      });
+      try {
+        // Space out request starts and honour a pause.
+        for (;;) {
+          const now = Date.now();
+          const at = Math.max(nextStart, pausedUntil);
+          if (at <= now) break;
+          await sleep(at - now);
+        }
+        nextStart = Math.max(Date.now(), nextStart) + 1000 / perSecond;
+        return await fn();
+      } finally {
+        active--;
+        pump();
+      }
+    },
+  };
+}
+
+export const tmdbLimiter = createLimiter({ concurrency: env.tmdbConcurrency, perSecond: env.tmdbRps });
+const MAX_ATTEMPTS = 4;
+
+export async function tmdbGet(path, params, key, fetchImpl = fetch, limiter = tmdbLimiter) {
   if (!key) throw new TmdbError('No TMDB API key configured');
   const url = new URL(API + path);
   const headers = { accept: 'application/json' };
@@ -14,10 +63,31 @@ export async function tmdbGet(path, params, key, fetchImpl = fetch) {
   if (key.startsWith('eyJ')) headers.authorization = `Bearer ${key}`;
   else url.searchParams.set('api_key', key);
   for (const [k, v] of Object.entries(params || {})) if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
-  const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(5000) });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new TmdbError(`TMDB ${path} → HTTP ${res.status}`);
-  return res.json();
+
+  for (let attempt = 1; ; attempt++) {
+    let res;
+    try {
+      res = await limiter.run(() => fetchImpl(url, { headers, signal: AbortSignal.timeout(8000) }));
+    } catch (err) {
+      if (attempt >= MAX_ATTEMPTS) throw new TmdbError(`TMDB ${path}: ${err.message}`);
+      await sleep(500 * 2 ** attempt);
+      continue;
+    }
+    if (res.status === 404) return null;
+    if (res.ok) return res.json();
+    if (res.status === 401) throw new TmdbError('TMDB rejected the API key (HTTP 401)');
+    if ((res.status === 429 || res.status >= 500) && attempt < MAX_ATTEMPTS) {
+      const retryAfter = Number(res.headers?.get?.('retry-after'));
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** (attempt - 1);
+      if (res.status === 429) {
+        limiter.pause(waitMs);
+        logThrottled('tmdb-429', 60000, 'warn', `TMDB is rate limiting; pausing TMDB requests for ${Math.round(waitMs / 1000)}s (${limiter.queued} waiting)`);
+      }
+      await sleep(waitMs);
+      continue;
+    }
+    throw new TmdbError(`TMDB ${path} → HTTP ${res.status}`);
+  }
 }
 
 // Stremio ids: "tt0111161", "tt0944947:1:2" (episode), "tmdb:550" / "tmdb:movie:550".

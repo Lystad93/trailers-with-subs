@@ -138,6 +138,23 @@ test('series resolve through tv_results', async () => {
   assert.ok(calls.includes('/3/tv/1396'));
 });
 
+test('a skipped dub search marks the answer as partial', async () => {
+  const { SearchSkipped } = await import('../src/youtube.js');
+  const { fetchImpl } = fakeTmdb({
+    '/3/find/tt0000042': { movie_results: [{ id: 42 }] },
+    '/3/movie/42': { title: 'Toy', original_language: 'en', genres: [{ id: 16 }], videos: { results: [vid('ENtoy000001', 'en', 'Trailer', 'Trailer')] } },
+  });
+  const skipped = async () => {
+    throw new SearchSkipped('too many YouTube searches waiting');
+  };
+  const out = await findTrailers('movie', 'tt0000042', normalizeConfig({ tmdb: 'k5' }), { fetchImpl, search: skipped });
+  assert.deepEqual(out.map((t) => t.videoId), ['ENtoy000001']);
+  assert.equal(out.partial, true);
+
+  const done = await findTrailers('movie', 'tt0000042', normalizeConfig({ tmdb: 'k5' }), { fetchImpl, search: async () => [] });
+  assert.equal(done.partial, undefined);
+});
+
 test('YouTube search results are filtered to real Norwegian trailers of the title', () => {
   const titles = ['Frost 2', 'Frozen II'];
   assert.equal(isDubCandidate({ title: 'Frost 2 | Offisiell trailer | Norsk tale', duration: 90 }, titles), true);

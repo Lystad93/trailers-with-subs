@@ -1,6 +1,6 @@
 import { resolveTmdb, getTitleData } from './tmdb.js';
-import { searchYoutube, YT_ID } from './youtube.js';
-import { log } from './env.js';
+import { searchYoutube, SearchSkipped, YT_ID } from './youtube.js';
+import { log, logThrottled } from './env.js';
 
 export const NO_LANGS = new Set(['no', 'nb', 'nn']);
 const ANIMATION = 16;
@@ -93,6 +93,7 @@ export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searc
   const no = noVideos.map((v) => ({ videoId: v.key, mode: 'no', label: noLabel(v.name, data), name: v.name || 'Trailer' }));
 
   // Look for Norwegian dubs on YouTube when TMDB has none.
+  let partial = false;
   const searchWanted =
     config.no &&
     config.maxNo > no.length &&
@@ -100,11 +101,17 @@ export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searc
     (config.search === 'all' || (config.search === 'family' && (data.genres.includes(ANIMATION) || data.genres.includes(FAMILY))));
   if (searchWanted) {
     const job = search(data, config.maxNo - no.length).catch((err) => {
-      log.warn(`YouTube search failed for ${id}: ${err.message}`);
-      return [];
+      if (err instanceof SearchSkipped) log.debug(`YouTube search skipped for ${id}: ${err.message}`);
+      else logThrottled('yt-search-failed', 60000, 'warn', `YouTube search failed for ${id}: ${err.message}`);
+      return SKIPPED;
     });
-    const results = await Promise.race([job, new Promise((r) => setTimeout(() => r(null), searchBudgetMs))]);
-    if (results === null) log.info(`YouTube search for ${id} is still running; it will be cached for next time`);
+    const job2 = job.then((r) => {
+      if (r === SKIPPED) partial = true;
+      return r === SKIPPED ? [] : r;
+    });
+    const results = await Promise.race([job2, new Promise((r) => setTimeout(() => r(null), searchBudgetMs))]);
+    if (results === null) partial = true;
+    if (results === null) log.debug(`YouTube search for ${id} is still running; it will be cached for next time`);
     for (const r of results || []) {
       if (!no.some((n) => n.videoId === r.id)) no.push({ videoId: r.id, mode: 'no', label: noLabel(r.title, data), name: r.title });
     }
@@ -123,5 +130,10 @@ export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searc
       .map((v) => ({ videoId: v.key, mode: 'sub', label: subLabel(v.iso_639_1 ?? 'null'), name: v.name || 'Trailer' }));
   }
 
-  return config.first === 'sub' ? [...sub, ...no] : [...no, ...sub];
+  const out = config.first === 'sub' ? [...sub, ...no] : [...no, ...sub];
+  // The dub search was skipped or is still running: worth asking again soon.
+  if (partial) out.partial = true;
+  return out;
 }
+
+const SKIPPED = Symbol('search skipped');

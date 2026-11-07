@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { env, log } from './env.js';
+import { env, log, logThrottled } from './env.js';
 import { decodeConfig, encodeConfig, makeProfile, parseProfile, DEFAULTS } from './config.js';
 import { findTrailers } from './trailers.js';
 import { initMedia, sign, handlePlay } from './media.js';
@@ -47,6 +47,7 @@ const streamMemo = new Memo({ max: 20000 });
 export async function buildStreams(type, id, config, origin, deps = {}) {
   const trailers = await findTrailers(type, id, config, { tmdbKey: env.tmdbKey, searchBudgetMs: env.searchBudgetMs, ...deps });
   const streams = [];
+  if (trailers.partial) streams.partial = true;
   for (const t of trailers) {
     const profile = makeProfile(t.mode, config);
     const url = `${origin}/play/${t.videoId}/${profile}/${sign(t.videoId, profile)}.mp4`;
@@ -120,11 +121,13 @@ async function route(req, res) {
     const origin = baseUrl(req);
     const cacheKey = `${origin}|${encodeConfig(config)}|${type}|${id}`;
     try {
-      const streams = await streamMemo.wrap(cacheKey, (v) => (v.length ? 6 : 1) * 60 * 60 * 1000, () => buildStreams(type, id, config, origin));
+      const streams = await streamMemo.wrap(cacheKey, (v) => (v.partial ? 10 * 60 * 1000 : (v.length ? 6 : 1) * 60 * 60 * 1000), () => buildStreams(type, id, config, origin));
       return json(res, 200, { streams }, streams.length ? 6 * 3600 : 3600);
     } catch (err) {
-      log.warn(`stream ${type}/${id}: ${err.message}`);
-      return json(res, 200, { streams: [] });
+      // An error status makes AIOMetadata try again later; an empty list would be kept for a day.
+      logThrottled('stream-error', 60000, 'warn', `stream ${type}/${id}: ${err.message}`);
+      res.setHeader('Retry-After', '60');
+      return json(res, 503, { streams: [], error: 'Temporarily unavailable, try again later' });
     }
   }
 

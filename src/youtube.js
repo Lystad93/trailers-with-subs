@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { env, log } from './env.js';
+import { env, log, logThrottled } from './env.js';
 import { Memo } from './memo.js';
 
 export const YT_ID = /^[A-Za-z0-9_-]{11}$/;
@@ -47,22 +47,52 @@ export function getInfo(videoId) {
   });
 }
 
+export const BOT_CHECK = /confirm you(?:'|’)re not a bot|Sign in to confirm/i;
+
+export function botCheckHint(source) {
+  logThrottled(
+    'yt-bot-check',
+    10 * 60 * 1000,
+    'warn',
+    `YouTube is asking this server to "confirm you're not a bot" (${source}). Datacenter IPs get this often: ` +
+      'route yt-dlp through a proxy (e.g. YTDLP_ARGS=--proxy http://warp:1080) or give it cookies (YTDLP_COOKIES=/data/cookies.txt).'
+  );
+}
+
+export class SearchSkipped extends Error {}
+
 // Searches run one at a time with a gap between them, so catalog warm-ups do not get the
-// server flagged as a bot.
+// server flagged as a bot. Past a short queue they are skipped (and not cached), and after a
+// bot check they stop for a while.
 let searchChain = Promise.resolve();
+let searchQueued = 0;
+let searchPausedUntil = 0;
 const SEARCH_GAP_MS = 1500;
+const BOT_PAUSE_MS = 30 * 60 * 1000;
 const searchMemo = new Memo({ max: 5000 });
 
 export function searchYoutube(query, count = 8) {
   return searchMemo.wrap(`${count}:${query}`, (v) => (v.length ? 7 : 2) * 24 * 60 * 60 * 1000, () => {
+    if (Date.now() < searchPausedUntil) return Promise.reject(new SearchSkipped('YouTube searches are paused after a bot check'));
+    if (searchQueued >= env.searchQueueMax) return Promise.reject(new SearchSkipped('too many YouTube searches waiting'));
+    searchQueued++;
     const run = searchChain.then(async () => {
       try {
+        if (Date.now() < searchPausedUntil) throw new SearchSkipped('YouTube searches are paused after a bot check');
         const { stdout } = await runYtdlp(['--flat-playlist', '-J', '--', `ytsearch${count}:${query}`], { timeoutMs: 30000 });
         const data = JSON.parse(stdout);
         return (data.entries || [])
           .filter((e) => e && YT_ID.test(e.id || ''))
           .map((e) => ({ id: e.id, title: e.title || '', duration: e.duration ?? null, channel: e.channel || e.uploader || '' }));
+      } catch (err) {
+        if (BOT_CHECK.test(err.message)) {
+          searchPausedUntil = Date.now() + BOT_PAUSE_MS;
+          botCheckHint('search; searches paused for 30 minutes');
+          throw new SearchSkipped('YouTube bot check');
+        }
+        throw err;
       } finally {
+        searchQueued--;
         await new Promise((r) => setTimeout(r, SEARCH_GAP_MS));
       }
     });

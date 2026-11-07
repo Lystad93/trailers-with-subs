@@ -106,6 +106,8 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 | `YTDLP_AUTO_UPDATE` | `1` | Update yt-dlp each time the container starts |
 | `MAX_DURATION` | `600` | Refuse videos longer than this many seconds |
 | `SEARCH_BUDGET_MS` | `3500` | How long a trailer lookup waits for the YouTube search (AIOMetadata waits 6 s) |
+| `SEARCH_QUEUE_MAX` | `5` | YouTube searches allowed to wait in line; more are skipped and retried later |
+| `TMDB_RPS` / `TMDB_CONCURRENCY` | `20` / `6` | TMDB request rate and parallelism. TMDB allows ~50/s per IP, shared with AIOMetadata |
 | `SECRET` | random, kept in the cache dir | Signs play links so the server can't be used to fetch any YouTube video |
 
 ## Troubleshooting
@@ -118,6 +120,9 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 - **The first play doesn't start on Apple devices.** AVPlayer insists on byte ranges, which a trailer still being made
   can't offer. Opening it again a few seconds later plays the cached file.
 - **Changes don't show up.** AIOMetadata caches trailer lists for 24 hours (`TRAILER_ADDON_TTL`).
+- **Lots of requests when AIOMetadata starts.** Its catalog warm-up asks about every title at once. TMDB
+  calls are queued and rate limited, and when TMDB still fails the addon answers with an error
+  (503), so AIOMetadata asks again later instead of keeping an empty list for a day.
 
 ## Development
 
