@@ -59,6 +59,12 @@ and reinstall AIOMetadata in your client.
 You need a free TMDB API key (themoviedb.org → Settings → API). Put it in `TMDB_API_KEY` on
 the server, or in the settings page (it is then stored in the manifest URL).
 
+### With Viren070's docker-compose-template
+
+Ready-made files are in [`deploy/docker-compose-template`](deploy/docker-compose-template). They use
+Traefik and Authelia, and build from this repository, which also works on ARM (Oracle Ampere).
+The steps are in that folder's README.
+
 ### Without Docker
 
 You need Node.js 20+, ffmpeg (with libass), ffprobe and yt-dlp (`pip install "yt-dlp[default]"`).

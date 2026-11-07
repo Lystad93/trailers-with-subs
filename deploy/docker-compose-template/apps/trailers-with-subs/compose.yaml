@@ -1,0 +1,28 @@
+services:
+  trailers-with-subs:
+    build:
+      context: https://github.com/Lystad93/trailers-with-subs.git
+      dockerfile: Dockerfile
+    container_name: trailers-with-subs
+    restart: unless-stopped
+    expose:
+      - 7000
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.trailers-with-subs.rule=Host(`${TRAILERS_WITH_SUBS_HOSTNAME?}`)"
+      - "traefik.http.routers.trailers-with-subs.entrypoints=websecure"
+      - "traefik.http.routers.trailers-with-subs.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.trailers-with-subs.middlewares=authelia@docker"
+      - "traefik.http.services.trailers-with-subs.loadbalancer.server.port=7000"
+    volumes:
+      - ${DOCKER_DATA_DIR}/trailers-with-subs:/data
+    profiles:
+      - trailers-with-subs
+      - all
