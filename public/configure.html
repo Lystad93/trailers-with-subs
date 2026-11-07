@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Norske trailere – settings</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --text:#e8eaf0; --muted:#9aa1b2; --accent:#e4572e; --line:#2a2f3a; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f5f6f8; --card:#fff; --text:#1b1e25; --muted:#5d6475; --line:#dfe2e8; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 24px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 18px 8px; margin-bottom: 16px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  label.row { display:flex; gap:12px; align-items:flex-start; margin-bottom: 14px; cursor:pointer; }
+  label.row input[type=checkbox] { margin-top: 4px; width:18px; height:18px; accent-color: var(--accent); flex:none; }
+  .field { margin-bottom: 14px; }
+  .field > span { display:block; font-weight:600; margin-bottom:4px; }
+  small { color: var(--muted); display:block; }
+  select, input[type=text], input[type=number] { width:100%; padding:9px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); font:inherit; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+  .out { display:flex; gap:8px; }
+  .out input { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+  button { padding:9px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; white-space:nowrap; }
+  ol { padding-left: 20px; margin: 0 0 12px; }
+  .warn { color: #e0a43a; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🇳🇴 Norske trailere</h1>
+  <p class="lead">Norwegian dubbed trailers, and English trailers with Norwegian subtitles, for AIOMetadata.</p>
+
+  <section>
+    <h2>Which trailers</h2>
+    <label class="row"><input type="checkbox" id="no"><span><b>Norwegian trailers</b><small>Norwegian dubbed trailers (“norsk tale”), and trailers from the Norwegian distributor.</small></span></label>
+    <label class="row"><input type="checkbox" id="sub"><span><b>English trailers with Norwegian subtitles</b><small>For films not in English, the trailer in the film’s own language is used too.</small></span></label>
+    <div class="grid">
+      <label class="field"><span>Max Norwegian trailers</span><input type="number" id="maxNo" min="0" max="10"></label>
+      <label class="field"><span>Max subtitled trailers</span><input type="number" id="maxSub" min="0" max="10"></label>
+    </div>
+    <label class="field"><span>Show first</span>
+      <select id="first"><option value="no">Norwegian trailers</option><option value="sub">Subtitled trailers</option></select>
+    </label>
+    <label class="field"><span>Find Norwegian dubs on YouTube</span>
+      <select id="search">
+        <option value="family">For animation and family films (recommended)</option>
+        <option value="all">For every title (slower)</option>
+        <option value="off">Off: only what TMDB lists</option>
+      </select>
+      <small>Used when TMDB has no Norwegian trailer.</small>
+    </label>
+  </section>
+
+  <section>
+    <h2>Subtitles</h2>
+    <label class="field"><span>How subtitles are shown</span>
+      <select id="subs">
+        <option value="burn">Burned into the picture: always visible, works in every player</option>
+        <option value="soft">Subtitle track, on by default: no re-encoding, the player must support it</option>
+      </select>
+    </label>
+    <label class="row"><input type="checkbox" id="auto"><span><b>Allow YouTube’s translated and auto-generated subtitles</b><small>Used when the video has no Norwegian subtitles made by a person. Translations of human-made English subtitles come first, then translated auto-captions.</small></span></label>
+  </section>
+
+  <section>
+    <h2>Quality</h2>
+    <div class="grid">
+      <label class="field"><span>Max resolution</span>
+        <select id="q"><option>2160</option><option>1440</option><option>1080</option><option>720</option><option>480</option></select>
+      </label>
+      <label class="field"><span>Video codec</span>
+        <select id="codec">
+          <option value="h264">H.264: plays everywhere (YouTube has it up to 1080p)</option>
+          <option value="any">Best available: VP9/AV1, up to 4K</option>
+        </select>
+      </label>
+    </div>
+    <small id="burnNote" class="warn" style="margin:-6px 0 14px">Burned-in subtitles re-encode the video. The server caps this at its BURN_MAX_HEIGHT (default 1080p).</small>
+    <label class="row"><input type="checkbox" id="yt"><span><b>Also list the plain YouTube video</b><small>Opens in Stremio’s own YouTube player, without the added subtitles.</small></span></label>
+  </section>
+
+  <section>
+    <h2>TMDB</h2>
+    <label class="field"><span>TMDB API key <span id="tmdbOpt"></span></span>
+      <input type="text" id="tmdb" autocomplete="off" spellcheck="false" placeholder="v3 API key or v4 read access token">
+      <small>Free at themoviedb.org → Settings → API.</small>
+    </label>
+  </section>
+
+  <section>
+    <h2>Use it in AIOMetadata</h2>
+    <div class="field out"><input type="text" id="url" readonly><button id="copy" type="button">Copy</button></div>
+    <ol>
+      <li>Open your AIOMetadata <i>/configure</i> page.</li>
+      <li>Under <b>Trailers</b>, set the source to <b>A trailer addon</b>.</li>
+      <li>Paste the URL above, then save and reinstall AIOMetadata.</li>
+    </ol>
+  </section>
+</main>
+<script>
+  const CONFIG = __CONFIG__;
+  const DEFAULTS = __DEFAULTS__;
+  const SERVER_HAS_TMDB = __SERVER_HAS_TMDB__;
+  const $ = (id) => document.getElementById(id);
+  const fields = Object.keys(DEFAULTS);
+  for (const k of fields) {
+    const el = $(k);
+    if (!el) continue;
+    if (el.type === 'checkbox') el.checked = !!CONFIG[k];
+    else el.value = CONFIG[k];
+  }
+  $('tmdbOpt').textContent = SERVER_HAS_TMDB ? '(optional: the server has one)' : '(required)';
+
+  function b64url(str) {
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    bytes.forEach((b) => (bin += String.fromCharCode(b)));
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function update() {
+    const cfg = {};
+    for (const k of fields) {
+      const el = $(k);
+      if (!el) continue;
+      let v = el.type === 'checkbox' ? el.checked : el.type === 'number' || k === 'q' ? Number(el.value) : el.value.trim();
+      if (v !== DEFAULTS[k]) cfg[k] = v;
+    }
+    const seg = Object.keys(cfg).length ? b64url(JSON.stringify(cfg)) + '/' : '';
+    $('url').value = `${location.origin}/${seg}manifest.json`;
+    $('burnNote').style.display = $('subs').value === 'burn' && Number($('q').value) > 1080 ? 'block' : 'none';
+  }
+  document.querySelectorAll('input,select').forEach((el) => el.addEventListener('input', update));
+  $('copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('url').value); } catch { $('url').select(); document.execCommand('copy'); }
+    $('copy').textContent = 'Copied';
+    setTimeout(() => ($('copy').textContent = 'Copy'), 1500);
+  });
+  update();
+</script>
+</body>
+</html>

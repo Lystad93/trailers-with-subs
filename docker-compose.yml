@@ -1,0 +1,20 @@
+services:
+  trailers:
+    build: .
+    container_name: norske-trailere
+    restart: unless-stopped
+    ports:
+      - "7000:7000"
+    environment:
+      # Public address of this addon, as AIOMetadata will reach it.
+      BASE_URL: "http://192.168.1.10:7000"
+      # Optional: then users don't need to enter their own key.
+      TMDB_API_KEY: ""
+      # Optional: export YouTube cookies (Netscape format) to /data/cookies.txt if YouTube
+      # asks to "confirm you're not a bot".
+      # YTDLP_COOKIES: /data/cookies.txt
+      CACHE_MAX_GB: "10"
+      MAX_JOBS: "2"
+      BURN_MAX_HEIGHT: "1080"
+    volumes:
+      - ./data:/data
