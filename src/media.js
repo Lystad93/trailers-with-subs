@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { env, log } from './env.js';
-import { getInfo, pickFormats, subtitleCandidates, runYtdlp, baseArgs, BOT_CHECK, botCheckHint } from './youtube.js';
-import { vttToSrt } from './subtitles.js';
+import { getInfo, pickFormats, subtitlePlan, runYtdlp, baseArgs, BOT_CHECK, botCheckHint } from './youtube.js';
+import { translateCues, translatorName } from './translate.js';
+import { vttToSrt, parseVtt, cleanCues, cuesToSrt } from './subtitles.js';
 
 // ---------------------------------------------------------------------------------------------
 // Signing: play URLs are signed so the server cannot be used to fetch arbitrary YouTube videos.
@@ -245,7 +246,7 @@ export async function buildVideo(videoId, profile, workDir, deps = {}) {
   let srtPath = null;
   let subsTransient = false;
   if (withSubs) {
-    const result = await fetchNorwegianSubtitles(videoId, info, profile, infoPath, workDir, fetchSubtitle, deps.subtitleRetryMs);
+    const result = await fetchNorwegianSubtitles(videoId, info, profile, infoPath, workDir, fetchSubtitle, deps);
     srtPath = result.srtPath;
     subsTransient = result.transient;
     if (!srtPath) log.warn(`${videoId}: no Norwegian subtitles${subsTransient ? ' this time (YouTube refused for now)' : ' found'}, playing without`);
@@ -340,25 +341,71 @@ export async function buildVideo(videoId, profile, workDir, deps = {}) {
 
 const TRANSIENT = /HTTP Error (429|5\d\d)|timed out|Connection|Temporary failure|reset by peer/i;
 
-// Tries the Norwegian tracks best first. YouTube often answers 429 for translated subtitles,
-// so wait and retry once, and move on to the next track; give up after about 25 seconds.
-async function fetchNorwegianSubtitles(videoId, info, profile, infoPath, workDir, fetchSubtitle, retryMs = 5000) {
+// Norwegian subtitles are kept per video, so other profiles (burned / soft / quality) and
+// rebuilds don't ask YouTube or the translator again. 'm' holds only human-made Norwegian.
+const subCachePath = (videoId, auto) => path.join(env.cacheDir, 'subs', `${videoId}.${auto ? 'a' : 'm'}.srt`);
+
+async function readSubCache(videoId, auto) {
+  for (const p of auto ? [subCachePath(videoId, true), subCachePath(videoId, false)] : [subCachePath(videoId, false)]) {
+    try {
+      const srt = await fsp.readFile(p, 'utf8');
+      if (srt.trim()) return srt;
+    } catch {
+      /* not cached */
+    }
+  }
+  return null;
+}
+
+// Tries the Norwegian subtitle plan best first (see subtitlePlan). YouTube often answers 429,
+// so a temporary failure is retried once; everything gives up after about 25 seconds.
+async function fetchNorwegianSubtitles(videoId, info, profile, infoPath, workDir, fetchSubtitle, deps = {}) {
+  const retryMs = deps.subtitleRetryMs ?? 5000;
+  const translate = deps.translateCues || translateCues;
+  const canTranslate = Boolean(deps.translateCues || translatorName());
+  const srtPath = path.join(workDir, 'sub.srt');
+
+  const cached = await readSubCache(videoId, profile.auto);
+  if (cached) {
+    await fsp.writeFile(srtPath, cached);
+    log.info(`${videoId}: Norwegian subtitles from cache`);
+    return { srtPath, transient: false };
+  }
+
+  const plan = subtitlePlan(info, { auto: profile.auto, translate: canTranslate });
+  if (!plan.length) {
+    const manual = Object.keys(info?.subtitles || {}).filter((k) => k !== 'live_chat');
+    const auto = Object.keys(info?.automatic_captions || {});
+    log.info(`${videoId}: no usable subtitle tracks (subtitles: ${manual.join(', ') || 'none'}; auto captions: ${auto.length ? auto.slice(0, 8).join(', ') + (auto.length > 8 ? ', …' : '') : 'none'})`);
+  }
+
   const deadline = Date.now() + 25000;
   let transient = false;
-  for (const choice of subtitleCandidates(info, { auto: profile.auto })) {
+  for (const choice of plan) {
     for (let attempt = 1; attempt <= 2 && Date.now() < deadline; attempt++) {
       try {
         const vtt = await fetchSubtitle(infoPath, choice.key, workDir);
-        const { srt, count } = vttToSrt(vtt || '');
+        let srt;
+        let count;
+        let how = choice.kind;
+        if (choice.translate) {
+          const cues = await translate(cleanCues(parseVtt(vtt || '')));
+          srt = cuesToSrt(cues);
+          count = cues.length;
+          how = `${choice.kind}, translated with ${deps.translateCues ? 'test translator' : translatorName()}`;
+        } else {
+          ({ srt, count } = vttToSrt(vtt || ''));
+        }
         if (count === 0) break; // empty track: try the next one
-        const srtPath = path.join(workDir, 'sub.srt');
         await fsp.writeFile(srtPath, srt);
-        log.info(`${videoId}: Norwegian subtitles "${choice.key}" (${choice.kind}, ${count} lines)`);
+        await fsp.mkdir(path.dirname(subCachePath(videoId, true)), { recursive: true });
+        await fsp.writeFile(subCachePath(videoId, profile.auto && !(choice.kind === 'manual' && !choice.translate) ? true : false), srt);
+        log.info(`${videoId}: Norwegian subtitles from "${choice.key}" (${how}, ${count} lines)`);
         return { srtPath, transient: false };
       } catch (err) {
-        const isTransient = TRANSIENT.test(err.message);
+        const isTransient = err.transient ?? TRANSIENT.test(err.message);
         transient ||= isTransient;
-        log.warn(`${videoId}: subtitles "${choice.key}" failed: ${err.message.split('\n')[0]}`);
+        log.warn(`${videoId}: subtitles "${choice.key}"${choice.translate ? ' (to translate)' : ''} failed: ${err.message.split('\n')[0]}`);
         if (!isTransient) break;
         if (attempt === 1 && Date.now() + retryMs < deadline) await new Promise((r) => setTimeout(r, retryMs));
       }

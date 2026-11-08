@@ -210,6 +210,30 @@ export function subtitleCandidates(info, { auto = true } = {}) {
   return out;
 }
 
+/**
+ * The order to try subtitles in. With a translator of our own:
+ * 1. Norwegian subtitles a person made
+ * 2. human-made subtitles in another language (English first), translated by us
+ * 3. the original-language auto-generated captions, translated by us
+ * 4. YouTube's own Norwegian translations (often rate limited for servers)
+ */
+export function subtitlePlan(info, { auto = true, translate = false } = {}) {
+  const base = subtitleCandidates(info, { auto });
+  if (!auto || !translate) return base;
+  const own = base.filter((c) => c.kind === 'manual');
+  const youtube = base.filter((c) => c.kind !== 'manual');
+  const manual = Object.keys(info?.subtitles || {})
+    .filter((k) => k !== 'live_chat' && !NORWEGIAN.test(k))
+    .sort((a, b) => Number(/^en/i.test(b)) - Number(/^en/i.test(a)));
+  const asr = Object.keys(info?.automatic_captions || {}).filter((k) => /-orig$/i.test(k) && !NORWEGIAN.test(k));
+  return [
+    ...own,
+    ...manual.slice(0, 2).map((key) => ({ key, kind: 'manual', translate: true })),
+    ...asr.slice(0, 1).map((key) => ({ key, kind: 'auto', translate: true })),
+    ...youtube,
+  ];
+}
+
 // The best Norwegian subtitle track (see subtitleCandidates for the order).
 export function pickSubtitle(info, options) {
   return subtitleCandidates(info, options)[0] || null;

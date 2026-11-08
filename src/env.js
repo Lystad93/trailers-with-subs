@@ -61,6 +61,10 @@ export const env = {
   tmdbRps: Math.max(1, num(process.env.TMDB_RPS, 20)),
   tmdbConcurrency: Math.max(1, num(process.env.TMDB_CONCURRENCY, 6)),
   logLevel: process.env.LOG_LEVEL || 'info',
+  // Translate subtitles ourselves instead of asking YouTube (whose translations are rate limited).
+  deeplKey: (process.env.DEEPL_API_KEY || '').trim(),
+  libreUrl: (process.env.LIBRETRANSLATE_URL || '').trim(),
+  libreKey: (process.env.LIBRETRANSLATE_API_KEY || '').trim(),
 };
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };

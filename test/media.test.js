@@ -244,3 +244,41 @@ test('a subtitle problem that is not temporary is final', { skip: !hasFfmpeg }, 
   });
   assert.equal(fs.existsSync(media.finalPath(key).replace(/\.mp4$/, '.retry-subs')), false);
 });
+
+test('with a translator, the English track is translated and YouTube translations are not touched', { skip: !hasFfmpeg }, async () => {
+  const tried = [];
+  const translated = [];
+  const fetchSubtitle = async (_p, k) => {
+    tried.push(k);
+    if (k.startsWith('no')) rateLimited();
+    return ['WEBVTT', '', '00:00:00.500 --> 00:00:04.000', 'Hello there.', ''].join('\n');
+  };
+  const d = {
+    ...deps,
+    fetchSubtitle,
+    translateCues: async (cues) => {
+      translated.push(...cues.map((c) => c.lines.join(' ')));
+      return cues.map((c) => ({ ...c, lines: ['Hei der.'] }));
+    },
+  };
+  const profileStr = 'sub.720.h264.soft.a';
+  const srv = http.createServer((req, res) => media.handlePlay(req, res, 'vvvvvvvvvvv', profileStr, parseProfile(profileStr), d));
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  await get(`http://127.0.0.1:${srv.address().port}/`);
+  const key = media.cacheKey('vvvvvvvvvvv', profileStr);
+  for (let i = 0; i < 100 && (media.getJob(key) || !fs.existsSync(media.finalPath(key))); i++) await new Promise((r) => setTimeout(r, 100));
+
+  assert.deepEqual(tried, ['en']);
+  assert.deepEqual(translated, ['Hello there.']);
+  const subText = spawnSync('ffmpeg', ['-v', 'error', '-i', media.finalPath(key), '-map', '0:s:0', '-f', 'srt', '-']).stdout.toString();
+  assert.match(subText, /Hei der\./);
+
+  // Another profile of the same video reuses the subtitles without asking again.
+  const profile2 = 'sub.720.h264.burn.a';
+  const srv2 = http.createServer((req, res) => media.handlePlay(req, res, 'vvvvvvvvvvv', profile2, parseProfile(profile2), d));
+  await new Promise((r) => srv2.listen(0, '127.0.0.1', r));
+  await get(`http://127.0.0.1:${srv2.address().port}/`);
+  srv.close();
+  srv2.close();
+  assert.deepEqual(tried, ['en']);
+});
