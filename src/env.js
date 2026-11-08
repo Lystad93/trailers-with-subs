@@ -62,7 +62,8 @@ export const env = {
   tmdbConcurrency: Math.max(1, num(process.env.TMDB_CONCURRENCY, 6)),
   logLevel: process.env.LOG_LEVEL || 'info',
   // Translate subtitles ourselves instead of asking YouTube (whose translations are rate limited).
-  deeplKey: (process.env.DEEPL_API_KEY || '').trim(),
+  geminiKey: (process.env.GEMINI_API_KEY || '').trim(),
+  geminiModel: (process.env.GEMINI_MODEL || 'gemini-flash-latest').trim(),
   libreUrl: (process.env.LIBRETRANSLATE_URL || '').trim(),
   libreKey: (process.env.LIBRETRANSLATE_API_KEY || '').trim(),
 };

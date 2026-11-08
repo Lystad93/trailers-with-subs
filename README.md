@@ -8,8 +8,8 @@ A self-hosted trailer addon for [AIOMetadata](https://github.com/cedya77/aiometa
 - **English trailers with Norwegian subtitles.** Non-English films also get their original-language trailer subtitled.
   The subtitles are picked best first:
   1. Norwegian subtitles a person made (`nb` / `no` / `nn`)
-  2. Human-made English subtitles, translated to Norwegian. The addon uses DeepL or LibreTranslate
-     when one is set up (recommended, see `DEEPL_API_KEY`), otherwise YouTube's own translation
+  2. Human-made English subtitles, translated to Norwegian. The addon uses Gemini or LibreTranslate
+     when one is set up (recommended, see `GEMINI_API_KEY`), otherwise YouTube's own translation
   3. The auto-generated captions, translated the same way (can be turned off)
 
 Every trailer is fetched in the **best quality YouTube has**: separate video and audio streams up to
@@ -102,7 +102,8 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 | `BURN_MAX_HEIGHT` | `1080` | Highest resolution for burned-in subtitles (re-encoding 4K is slow) |
 | `BURN_PRESET` / `BURN_CRF` | `veryfast` / `20` | x264 settings for burned-in subtitles |
 | `SUB_FONT` / `SUB_FONT_SIZE` | `DejaVu Sans` / `18` | Burned-in subtitle style (the size is relative to a 288-line canvas) |
-| `DEEPL_API_KEY` | – | Translate subtitles with DeepL (free key: 500,000 characters/month, about 300 trailers). Strongly recommended on a VPS: YouTube rate limits its own translations for servers |
+| `GEMINI_API_KEY` | – | Translate subtitles with Google Gemini (key from aistudio.google.com; the same key AIOMetadata uses works). Strongly recommended on a VPS: YouTube rate limits its own translations for servers |
+| `GEMINI_MODEL` | `gemini-flash-latest` | Gemini model for translation |
 | `LIBRETRANSLATE_URL` / `LIBRETRANSLATE_API_KEY` | – | Or translate with a LibreTranslate server, e.g. `http://libretranslate:5000` |
 | `YTDLP_COOKIES` | – | Path to a cookies.txt, if YouTube asks you to sign in |
 | `YTDLP_ARGS` | – | Extra yt-dlp arguments, e.g. `--extractor-args youtube:player_client=…` |
@@ -119,7 +120,7 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
   IPs. Run the addon on a home connection, or export YouTube cookies from a browser to
   `./data/cookies.txt` and set `YTDLP_COOKIES=/data/cookies.txt`.
 - **`HTTP Error 429` on subtitles.** YouTube rate limits its *translated* subtitles (`no-en`, `no`)
-  hard for servers. Set `DEEPL_API_KEY` (or `LIBRETRANSLATE_URL`): the addon then fetches the original
+  hard for servers. Set `GEMINI_API_KEY` (or `LIBRETRANSLATE_URL`): the addon then fetches the original
   track, an ordinary request, and translates it itself. Without one it retries, and if YouTube still
   refuses, plays the trailer without subtitles and tries again 30 minutes later.
 - **No subtitles on a trailer.** The video has no captions at all (music-only trailers), or you have turned off

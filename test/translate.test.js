@@ -1,39 +1,56 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-process.env.DEEPL_API_KEY = 'test-key:fx';
-const { translateTexts, translateCues, mergeForTranslation, wrapText, TranslateError } = await import('../src/translate.js');
+process.env.GEMINI_API_KEY = 'test-key';
+process.env.GEMINI_MODEL = 'gemini-test';
+const { translateTexts, translateCues, mergeForTranslation, wrapText, translatorName, TranslateError } = await import('../src/translate.js');
 const { subtitlePlan } = await import('../src/youtube.js');
 
-function fakeDeepl(handler) {
+// A stand-in for Gemini's generateContent endpoint.
+function fakeGemini(answer) {
   const calls = [];
   const fetchImpl = async (url, opts) => {
     const body = JSON.parse(opts.body);
-    calls.push({ url: String(url), headers: opts.headers, body });
-    return handler(body);
+    const lines = JSON.parse(body.contents[0].parts[0].text.split('\n').slice(-1)[0]);
+    calls.push({ url: String(url), headers: opts.headers, body, lines });
+    return answer(lines, calls.length);
   };
   return { fetchImpl, calls };
 }
-const ok = (data) => ({ ok: true, status: 200, json: async () => data });
-
-test('DeepL is called the way its API expects, in batches of 50', async () => {
-  const { fetchImpl, calls } = fakeDeepl((body) => ok({ translations: body.text.map((t) => ({ text: `NO:${t}` })) }));
-  const texts = Array.from({ length: 120 }, (_, i) => `line ${i}`);
-  const out = await translateTexts(texts, fetchImpl);
-  assert.equal(out.length, 120);
-  assert.equal(out[119], 'NO:line 119');
-  assert.equal(calls.length, 3);
-  assert.equal(calls[0].url, 'https://api-free.deepl.com/v2/translate');
-  assert.equal(calls[0].headers.authorization, 'DeepL-Auth-Key test-key:fx');
-  assert.equal(calls[0].body.target_lang, 'NB');
-  assert.equal(calls[0].body.text.length, 50);
+const reply = (value) => ({
+  ok: true,
+  status: 200,
+  json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(value) }] }, finishReason: 'STOP' }] }),
 });
 
-test('quota and rate limits are reported as such', async () => {
-  const quota = fakeDeepl(() => ({ ok: false, status: 456, json: async () => ({}) }));
-  await assert.rejects(translateTexts(['a'], quota.fetchImpl), (e) => e instanceof TranslateError && !e.transient && /quota/.test(e.message));
-  const busy = fakeDeepl(() => ({ ok: false, status: 429, json: async () => ({}) }));
-  await assert.rejects(translateTexts(['a'], busy.fetchImpl), (e) => e.transient === true);
+test('Gemini gets the lines as JSON and must answer with a JSON array of the same length', async () => {
+  assert.equal(translatorName(), 'Gemini (gemini-test)');
+  const { fetchImpl, calls } = fakeGemini((lines) => reply(lines.map((l) => `NO:${l}`)));
+  const out = await translateTexts(['Hello.', 'Run!'], fetchImpl, 'Dune: Part Two | Official Trailer');
+  assert.deepEqual(out, ['NO:Hello.', 'NO:Run!']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent');
+  assert.equal(calls[0].headers['x-goog-api-key'], 'test-key');
+  assert.equal(calls[0].body.generationConfig.responseMimeType, 'application/json');
+  assert.deepEqual(calls[0].body.generationConfig.responseSchema, { type: 'ARRAY', items: { type: 'STRING' } });
+  assert.match(calls[0].body.systemInstruction.parts[0].text, /Norwegian Bokmål/);
+  assert.match(calls[0].body.contents[0].parts[0].text, /^Trailer: Dune: Part Two/);
+});
+
+test('a reply with the wrong number of lines is asked again, then given up on', async () => {
+  const flaky = fakeGemini((lines, n) => reply(n === 1 ? ['only one'] : lines.map((l) => `NO:${l}`)));
+  assert.deepEqual(await translateTexts(['a', 'b'], flaky.fetchImpl), ['NO:a', 'NO:b']);
+  assert.equal(flaky.calls.length, 2);
+
+  const broken = fakeGemini(() => reply('not an array'));
+  await assert.rejects(translateTexts(['a', 'b'], broken.fetchImpl), /did not return 2 translated lines/);
+});
+
+test('rate limits are temporary, a bad key is not', async () => {
+  const busy = fakeGemini(() => ({ ok: false, status: 429, json: async () => ({ error: { message: 'Resource has been exhausted' } }) }));
+  await assert.rejects(translateTexts(['a'], busy.fetchImpl), (e) => e instanceof TranslateError && e.transient && /exhausted/.test(e.message));
+  const bad = fakeGemini(() => ({ ok: false, status: 400, json: async () => ({ error: { message: 'API key not valid' } }) }));
+  await assert.rejects(translateTexts(['a'], bad.fetchImpl), (e) => !e.transient && /API key not valid/.test(e.message));
 });
 
 test('auto-caption fragments are merged into sentences before translating', () => {
@@ -60,7 +77,7 @@ test('long lines are split into two balanced lines', () => {
 });
 
 test('translateCues keeps the timing of the merged cues', async () => {
-  const { fetchImpl } = fakeDeepl((body) => ok({ translations: body.text.map((t) => ({ text: t === 'Hello there.' ? 'Hei der.' : t })) }));
+  const { fetchImpl } = fakeGemini((lines) => reply(lines.map((t) => (t === 'Hello there.' ? 'Hei der.' : t))));
   const cues = await translateCues([{ start: 500, end: 1500, lines: ['Hello', 'there.'] }], fetchImpl);
   assert.deepEqual(cues, [{ start: 500, end: 1500, lines: ['Hei der.'] }]);
 });

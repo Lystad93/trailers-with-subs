@@ -389,7 +389,7 @@ async function fetchNorwegianSubtitles(videoId, info, profile, infoPath, workDir
         let count;
         let how = choice.kind;
         if (choice.translate) {
-          const cues = await translate(cleanCues(parseVtt(vtt || '')));
+          const cues = await translate(cleanCues(parseVtt(vtt || '')), undefined, info.title || '');
           srt = cuesToSrt(cues);
           count = cues.length;
           how = `${choice.kind}, translated with ${deps.translateCues ? 'test translator' : translatorName()}`;
