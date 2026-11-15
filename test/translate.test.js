@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.GEMINI_API_KEY = 'test-key';
+process.env.LOG_LEVEL = 'error';
 process.env.GEMINI_MODEL = 'gemini-test';
 const { translateTexts, translateCues, mergeForTranslation, wrapText, translatorName, TranslateError } = await import('../src/translate.js');
 const { subtitlePlan } = await import('../src/youtube.js');
@@ -33,24 +34,23 @@ test('Gemini gets the lines as JSON and must answer with a JSON array of the sam
   assert.equal(calls[0].headers['x-goog-api-key'], 'test-key');
   assert.equal(calls[0].body.generationConfig.responseMimeType, 'application/json');
   assert.deepEqual(calls[0].body.generationConfig.responseSchema, { type: 'ARRAY', items: { type: 'STRING' } });
+  assert.deepEqual(calls[0].body.generationConfig.thinkingConfig, { thinkingLevel: 'minimal' });
   assert.match(calls[0].body.systemInstruction.parts[0].text, /Norwegian Bokmål/);
   assert.match(calls[0].body.contents[0].parts[0].text, /^Trailer: Dune: Part Two/);
 });
 
-test('thinking is switched off for speed, and left alone for models that refuse that', async () => {
-  let n = 0;
-  const { fetchImpl, calls } = fakeGemini((lines) => {
-    n++;
-    if (n === 2) return { ok: false, status: 400, json: async () => ({ error: { message: 'Budget 0 is invalid. This model only works in thinking mode.' } }) };
+test('thinking is turned down with the setting the model accepts, which is then remembered', async () => {
+  // A Gemini 2.5 model: refuses a thinking level, takes a budget of 0.
+  const { fetchImpl, calls } = fakeGemini((lines, n) => {
+    const config = calls[n - 1].body.generationConfig.thinkingConfig;
+    if (config?.thinkingLevel) return { ok: false, status: 400, json: async () => ({ error: { message: 'Thinking level is not supported for this model.' } }) };
     return reply(lines.map((l) => `NO:${l}`));
   });
-  await translateTexts(['a'], fetchImpl);
-  assert.deepEqual(calls[0].body.generationConfig.thinkingConfig, { thinkingBudget: 0 });
-  assert.deepEqual(await translateTexts(['b'], fetchImpl), ['NO:b']); // refused, then sent again without
-  assert.equal(calls[2].body.generationConfig.thinkingConfig, undefined);
-  await translateTexts(['c'], fetchImpl);
-  assert.equal(calls.length, 4);
-  assert.equal(calls[3].body.generationConfig.thinkingConfig, undefined);
+  assert.deepEqual(await translateTexts(['a'], fetchImpl), ['NO:a']);
+  assert.deepEqual(calls.map((c) => c.body.generationConfig.thinkingConfig), [{ thinkingLevel: 'minimal' }, { thinkingBudget: 0 }]);
+  await translateTexts(['b'], fetchImpl);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[2].body.generationConfig.thinkingConfig, { thinkingBudget: 0 });
 });
 
 test('a reply with the wrong number of lines is asked again, then given up on', async () => {

@@ -1,12 +1,13 @@
 // Translates subtitles to Norwegian Bokmål ourselves, with Gemini or a LibreTranslate server.
 // YouTube's own translations ("tlang") are rate limited hard for servers; the original-language
 // track is an ordinary request.
-import { env } from './env.js';
+import { env, log } from './env.js';
 
 export class TranslateError extends Error {
-  constructor(message, transient = false) {
+  constructor(message, transient = false, status = 0) {
     super(message);
     this.transient = transient;
+    this.status = status;
   }
 }
 
@@ -63,7 +64,7 @@ async function postJson(url, body, headers, fetchImpl) {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json', ...headers },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(60000),
     });
   } catch (err) {
     throw new TranslateError(`translation request failed: ${err.message}`, true);
@@ -77,7 +78,7 @@ async function postJson(url, body, headers, fetchImpl) {
       /* no body */
     }
     const reason = res.status === 403 || res.status === 401 ? 'translation key rejected' : `HTTP ${res.status}`;
-    throw new TranslateError(`translation failed: ${reason}${detail ? ` (${detail.slice(0, 200)})` : ''}`, transient);
+    throw new TranslateError(`translation failed: ${reason}${detail ? ` (${detail.slice(0, 200)})` : ''}`, transient, res.status);
   }
   return res.json();
 }
@@ -91,22 +92,30 @@ const GEMINI_INSTRUCTIONS = [
   'If a line is already Norwegian, or is only a sound or music cue, return it unchanged.',
 ].join(' ');
 
-// "Thinking" adds seconds a subtitle translation does not need. Models that cannot turn it off
-// reject the setting; then it is left out from there on.
-let thinkingOff = true;
+// "Thinking" makes a subtitle translation take 20 seconds instead of two, so ask for as little
+// as the model allows. Which setting a model takes differs: Gemini 3 and later want a level, 2.5
+// wants a budget, and some refuse both with HTTP 400. The first one a model accepts is remembered.
+const THINKING = [
+  { name: 'minimal', config: { thinkingLevel: 'minimal' } },
+  { name: 'off', config: { thinkingBudget: 0 } },
+  { name: 'low', config: { thinkingLevel: 'low' } },
+  { name: 'model default', config: null },
+];
+let thinking = 0;
 
 async function geminiRequest(url, body, fetchImpl) {
   const headers = { 'x-goog-api-key': env.geminiKey };
-  if (thinkingOff) {
+  for (let i = thinking; ; i++) {
+    const { config } = THINKING[i];
+    const request = config ? { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: config } } : body;
     try {
-      const fast = { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: { thinkingBudget: 0 } } };
-      return await postJson(url, fast, headers, fetchImpl);
+      const data = await postJson(url, request, headers, fetchImpl);
+      thinking = i;
+      return data;
     } catch (err) {
-      if (!/HTTP 400/.test(err.message) || !/think|budget/i.test(err.message)) throw err;
-      thinkingOff = false;
+      if (err.status !== 400 || i === THINKING.length - 1) throw err;
     }
   }
-  return postJson(url, body, headers, fetchImpl);
 }
 
 async function gemini(texts, fetchImpl, context) {
@@ -123,6 +132,7 @@ async function gemini(texts, fetchImpl, context) {
   };
   // A model sometimes returns the wrong number of lines: ask once more before giving up.
   for (let attempt = 1; attempt <= 2; attempt++) {
+    const started = Date.now();
     const data = await geminiRequest(url, body, fetchImpl);
     const candidate = data?.candidates?.[0];
     const text = (candidate?.content?.parts || []).map((p) => p.text || '').join('');
@@ -132,7 +142,11 @@ async function gemini(texts, fetchImpl, context) {
     } catch {
       /* not JSON */
     }
-    if (Array.isArray(parsed) && parsed.length === texts.length && parsed.every((t) => typeof t === 'string')) return parsed;
+    if (Array.isArray(parsed) && parsed.length === texts.length && parsed.every((t) => typeof t === 'string')) {
+      const thoughts = data?.usageMetadata?.thoughtsTokenCount;
+      log.info(`Gemini (${env.geminiModel}) translated ${texts.length} lines in ${((Date.now() - started) / 1000).toFixed(1)}s (thinking: ${THINKING[thinking].name}${thoughts ? `, ${thoughts} thinking tokens` : ''})`);
+      return parsed;
+    }
     if (attempt === 2) {
       const why = candidate?.finishReason && candidate.finishReason !== 'STOP' ? ` (finish reason ${candidate.finishReason})` : '';
       throw new TranslateError(`Gemini did not return ${texts.length} translated lines${why}`);
