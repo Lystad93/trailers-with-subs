@@ -3,6 +3,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { env, log } from './env.js';
 import { getInfo, pickFormats, subtitlePlan, runYtdlp, baseArgs, BOT_CHECK, botCheckHint } from './youtube.js';
 import { translateCues, translatorName } from './translate.js';
@@ -18,6 +19,13 @@ export async function initMedia() {
   // Unfinished work from a previous run is useless.
   for (const entry of await fsp.readdir(path.join(env.cacheDir, 'work'))) {
     await fsp.rm(path.join(env.cacheDir, 'work', entry), { recursive: true, force: true });
+  }
+  // Files from versions before 2.0 (MP4) are never served again.
+  for (const name of await fsp.readdir(env.cacheDir)) {
+    if (name.endsWith('.mp4')) {
+      await fsp.rm(path.join(env.cacheDir, name), { force: true });
+      await fsp.rm(path.join(env.cacheDir, name.replace(/\.mp4$/, '.retry-subs')), { force: true });
+    }
   }
   if (!secret) {
     const file = path.join(env.cacheDir, '.secret');
@@ -38,8 +46,10 @@ export function sign(videoId, profile) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Jobs: one per (video, profile). The output is written as fragmented MP4 so it can be streamed
-// to the first viewer while it is still being made, then remuxed into a normal, seekable MP4.
+// Jobs: one per (video, profile). The output is a Matroska file: it can be streamed to the first
+// viewer while it is still being written, and once finished it has an index and is served with
+// ranges. Matroska holds every YouTube codec without re-encoding, plus a subtitle track that
+// players pick up by its language and default flag.
 
 const jobs = new Map();
 const failures = new Map();
@@ -61,18 +71,21 @@ function release() {
 }
 
 export const cacheKey = (videoId, profile) => `${videoId}_${profile.replace(/[^A-Za-z0-9]+/g, '-')}`;
-export const finalPath = (key) => path.join(env.cacheDir, `${key}.mp4`);
-// Marks a trailer built without subtitles because YouTube refused them for the moment.
+export const finalPath = (key) => path.join(env.cacheDir, `${key}.mkv`);
+// Marks a trailer built without subtitles because they were not there in time.
 const retryMarker = (key) => path.join(env.cacheDir, `${key}.retry-subs`);
 const SUBS_RETRY_MS = 30 * 60 * 1000;
 
-async function needsRebuild(key) {
+// Rebuild as soon as the subtitles have arrived in the cache, else try again after a while.
+async function needsRebuild(key, videoId, profile) {
+  let since;
   try {
-    const since = Number(await fsp.readFile(retryMarker(key), 'utf8'));
-    return Date.now() - since > SUBS_RETRY_MS;
+    since = Number(await fsp.readFile(retryMarker(key), 'utf8'));
   } catch {
     return false;
   }
+  if (profile.mode === 'sub' && (await readSubCache(videoId, profile.auto))) return true;
+  return Date.now() - since > SUBS_RETRY_MS;
 }
 
 export function getJob(key) {
@@ -110,8 +123,10 @@ export function startJob(videoId, profileStr, profile, deps = {}) {
       await fsp.mkdir(workDir, { recursive: true });
       const { outPath: out, retrySubs } = await buildVideo(videoId, profile, workDir, {
         ...deps,
+        onPlan: (plan) => Object.assign(job, plan),
         onPart: (p) => {
           job.partPath = p;
+          job.partAt = Date.now();
           partResolve(p);
         },
         onProgress: () => job.notify(),
@@ -125,7 +140,7 @@ export function startJob(videoId, profileStr, profile, deps = {}) {
       await fsp.rename(out, finalPath(key));
       if (retrySubs) await fsp.writeFile(retryMarker(key), String(Date.now()));
       else await fsp.rm(retryMarker(key), { force: true });
-      log.info(`ready: ${key}${retrySubs ? ' (without subtitles for now; tries again in 30 minutes)' : ''}`);
+      log.info(`ready: ${key}${retrySubs ? ' (without subtitles for now; rebuilt on a later play)' : ''}`);
       return finalPath(key);
     } catch (err) {
       failures.set(key, { at: Date.now(), error: err });
@@ -182,8 +197,8 @@ function waitExit(child, name) {
   });
 }
 
-// Stream types that actually hold packets. A fragmented MP4 declares every track up front, so
-// a track whose input failed is listed but empty.
+// Stream types that actually hold packets. Every track is declared up front, so a track whose
+// input failed is listed but empty.
 function streamTypes(file) {
   return new Promise((resolve, reject) => {
     const args = ['-v', 'error', '-count_packets', '-show_entries', 'stream=codec_type,nb_read_packets', '-of', 'csv=p=0', file];
@@ -222,51 +237,90 @@ async function defaultFetchSubtitle(infoPath, subKey, workDir) {
   return text;
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
+
+// Matroska wants ISO 639-2 language codes.
+const ISO3 = { en: 'eng', no: 'nor', nb: 'nor', nn: 'nno', sv: 'swe', da: 'dan', de: 'ger', fr: 'fre', es: 'spa', it: 'ita', ja: 'jpn', ko: 'kor', zh: 'chi', fi: 'fin', nl: 'dut', pt: 'por', ru: 'rus', pl: 'pol', hi: 'hin', tr: 'tur', is: 'ice' };
+const iso3 = (lang) => ISO3[String(lang || '').toLowerCase().split(/[-_]/)[0]] || null;
+
 export async function buildVideo(videoId, profile, workDir, deps = {}) {
   const loadInfo = deps.getInfo || getInfo;
   const openSource = deps.openSource || defaultOpenSource;
-  const fetchSubtitle = deps.fetchSubtitle || defaultFetchSubtitle;
+  const t0 = Date.now();
 
   const info = await loadInfo(videoId);
+  const tInfo = Date.now();
   if (info.duration && info.duration > env.maxDuration) throw new Error(`video is ${info.duration}s, longer than MAX_DURATION`);
   const infoPath = path.join(workDir, 'info.json');
   await fsp.writeFile(infoPath, JSON.stringify(info));
 
   const withSubs = profile.mode === 'sub';
-  let burn = withSubs && profile.subs === 'burn';
-  const maxHeight = burn ? Math.min(profile.q, env.burnMaxHeight) : profile.q;
+  const wantBurn = withSubs && profile.subs === 'burn';
   const picked = pickFormats(info, {
-    maxHeight,
+    maxHeight: wantBurn ? Math.min(profile.q, env.burnMaxHeight) : profile.q,
     codec: profile.codec,
-    burn,
+    burn: wantBurn,
     audioLang: profile.mode === 'no' ? /^(no|nb|nn)/ : null,
   });
   if (!picked) throw new Error('no playable formats');
-
-  let srtPath = null;
-  let subsTransient = false;
-  if (withSubs) {
-    const result = await fetchNorwegianSubtitles(videoId, info, profile, infoPath, workDir, fetchSubtitle, deps);
-    srtPath = result.srtPath;
-    subsTransient = result.transient;
-    if (!srtPath) log.warn(`${videoId}: no Norwegian subtitles${subsTransient ? ' this time (YouTube refused for now)' : ' found'}, playing without`);
-  }
-  if (!srtPath) burn = false;
-
   const sources = picked.muxed ? [picked.muxed] : [picked.video, picked.audio];
-  log.info(
-    `${videoId}: building ${profile.mode}${srtPath ? (burn ? '+burned subs' : '+soft subs') : ''} from ${sources.map((f) => `${f.format_id}(${f.height ? f.height + 'p ' : ''}${f.vcodec !== 'none' ? f.vcodec : f.acodec})`).join(' + ')}`
-  );
 
+  // Start the downloads now: their pipes fill while the subtitles are fetched and translated.
   const procs = sources.map((f) => openSource(infoPath, f.format_id));
+  // Node throws away the output of a child that exits before anyone reads it, so collect it from
+  // the start. A few megabytes of head start per stream also get the picture going sooner.
+  const feeds = procs.map((p) => p.stdout.pipe(new PassThrough({ highWaterMark: 8 * 1024 * 1024 })));
+  // Watched from the start: a short download can be over before ffmpeg is even running.
+  const sourceExits = procs.map((p, i) => waitExit(p, `yt-dlp(${sources[i].format_id})`));
+  for (const exit of sourceExits) exit.catch(() => {});
+  const killSources = () => {
+    for (const p of procs) if (p.exitCode === null && p.signalCode === null) p.kill('SIGKILL');
+  };
+  try {
+    return await assemble();
+  } catch (err) {
+    killSources();
+    throw err;
+  }
+
+  async function assemble() {
+
+  let srt = null;
+  let subsNote = '';
+  let retrySubs = false;
+  if (withSubs) {
+    // Subtitles get a limited head start. Past it the trailer starts without them and they are
+    // finished in the background, so the next play has them.
+    const budget = (deps.subWaitMs ?? env.subWaitMs) * (wantBurn ? 2 : 1);
+    const task = norwegianSubtitles(videoId, info, profile.auto, deps);
+    const result = await Promise.race([task, sleep(budget).then(() => null)]);
+    if (result?.srt) {
+      srt = result.srt;
+      subsNote = `subtitles ${secs(Date.now() - tInfo)} (${result.how})`;
+    } else if (result) {
+      retrySubs = result.transient;
+      subsNote = `no subtitles${result.transient ? ' this time' : ''}`;
+      log.warn(`${videoId}: no Norwegian subtitles${result.transient ? ' this time (a temporary failure)' : ' found'}, playing without`);
+    } else {
+      retrySubs = true;
+      subsNote = `subtitles not ready after ${secs(budget)}`;
+      log.warn(`${videoId}: subtitles not ready after ${secs(budget)}; starting without, they are finished in the background for the next play`);
+    }
+  }
+  const burn = wantBurn && Boolean(srt);
+  const softSubs = Boolean(srt) && !burn;
+  if (srt) await fsp.writeFile(path.join(workDir, 'sub.srt'), srt);
+
+  const expectedBytes = sources.reduce((sum, f) => sum + (f.filesize || f.filesize_approx || 0), 0);
+  deps.onPlan?.({ reencode: burn, expectedBytes: sources.every((f) => f.filesize || f.filesize_approx) ? expectedBytes : 0 });
+
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y'];
   args.push('-i', 'pipe:3');
   if (!picked.muxed) args.push('-i', 'pipe:4');
-  const softSubs = srtPath && !burn;
-  const subInput = picked.muxed ? 1 : 2;
   if (softSubs) args.push('-i', 'sub.srt');
   args.push('-map', '0:v:0', '-map', picked.muxed ? '0:a:0?' : '1:a:0');
-  if (softSubs) args.push('-map', `${subInput}:s:0`);
+  if (softSubs) args.push('-map', `${picked.muxed ? 1 : 2}:s:0`);
 
   if (burn) {
     args.push(
@@ -278,39 +332,48 @@ export async function buildVideo(videoId, profile, workDir, deps = {}) {
   } else {
     args.push('-c:v', 'copy');
   }
-  if (picked.audioIsAac) args.push('-c:a', 'copy');
-  else args.push('-c:a', 'aac', '-b:a', '192k');
+  args.push('-c:a', 'copy', '-disposition:a:0', 'default');
+  const audioLang = profile.mode === 'no' ? 'nor' : iso3((picked.audio || picked.muxed).language);
+  if (audioLang) args.push('-metadata:s:a:0', `language=${audioLang}`);
   if (softSubs) {
-    args.push('-c:s', 'mov_text', '-metadata:s:s:0', 'language=nor', '-metadata:s:s:0', 'title=Norsk', '-disposition:s:0', 'default+forced');
+    // Players choose this track by its language (the user's subtitle language) or its default flag.
+    args.push('-c:s', 'srt', '-metadata:s:s:0', 'language=nor', '-metadata:s:s:0', 'title=Norsk', '-disposition:s:0', 'default');
   }
-  const partPath = path.join(workDir, 'part.mp4');
-  args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', partPath);
+  const partPath = path.join(workDir, 'part.mkv');
+  args.push('-cluster_time_limit', '1000', '-flush_packets', '1', '-f', 'matroska', partPath);
+
+  log.info(
+    `${videoId}: ${burn ? 'encoding with burned-in subtitles' : softSubs ? 'copying with a subtitle track' : 'copying'} from ${sources.map((f) => `${f.format_id}(${f.height ? f.height + 'p ' : ''}${f.vcodec !== 'none' ? f.vcodec : f.acodec})`).join(' + ')} (video details took ${secs(tInfo - t0)})`
+  );
 
   const ff = spawn(env.ffmpeg, args, { cwd: workDir, stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
-  const exits = [waitExit(ff, 'ffmpeg'), ...procs.map((p, i) => waitExit(p, `yt-dlp(${sources[i].format_id})`))];
-  procs.forEach((p, i) => {
+  const exits = [waitExit(ff, 'ffmpeg'), ...sourceExits];
+  feeds.forEach((feed, i) => {
     const sink = ff.stdio[3 + i];
     sink.on('error', () => {}); // EPIPE when ffmpeg stops early
-    p.stdout.pipe(sink);
+    feed.pipe(sink);
   });
   const killAll = () => {
-    for (const p of [ff, ...procs]) if (p.exitCode === null) p.kill('SIGKILL');
+    killSources();
+    if (ff.exitCode === null) ff.kill('SIGKILL');
   };
 
   // Tell readers as soon as the file has its header; after that, on every growth.
   let announced = false;
+  let tFirst = 0;
   const watcher = setInterval(async () => {
     try {
       const st = await fsp.stat(partPath);
       if (!announced && st.size > 0) {
         announced = true;
+        tFirst = Date.now();
         deps.onPart?.(partPath);
       }
       deps.onProgress?.();
     } catch {
       /* not created yet */
     }
-  }, 200);
+  }, 100);
 
   try {
     await Promise.all(
@@ -330,13 +393,10 @@ export async function buildVideo(videoId, profile, workDir, deps = {}) {
   if (!types.includes('video') || !types.includes('audio')) throw new Error(`output is missing a track (has: ${types.join(', ') || 'nothing'})`);
   deps.onEncoded?.();
 
-  // Remux into a regular MP4 with the index up front, so every player can seek in it.
-  const outPath = path.join(workDir, 'final.mp4');
-  const remux = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', partPath, '-map', '0', '-c', 'copy'];
-  if (softSubs) remux.push('-disposition:s:0', 'default+forced');
-  remux.push('-movflags', '+faststart', '-f', 'mp4', outPath);
-  await waitExit(spawn(env.ffmpeg, remux, { stdio: ['ignore', 'ignore', 'pipe'] }), 'ffmpeg remux');
-  return { outPath, retrySubs: withSubs && !srtPath && subsTransient };
+  const timing = [`info ${secs(tInfo - t0)}`, subsNote, `first data after ${secs((tFirst || Date.now()) - t0)}`, `finished after ${secs(Date.now() - t0)}`].filter(Boolean);
+  log.info(`${videoId}: ${timing.join(', ')}`);
+  return { outPath: partPath, retrySubs: withSubs && !srt && retrySubs };
+  }
 }
 
 const TRANSIENT = /HTTP Error (429|5\d\d)|timed out|Connection|Temporary failure|reset by peer/i;
@@ -357,61 +417,86 @@ async function readSubCache(videoId, auto) {
   return null;
 }
 
+// One subtitle task per video at a time. It outlives the build that started it, so subtitles
+// that were too slow for the first play are in the cache for the next. Resolves to
+// { srt, how } or { srt: null, transient }; never rejects.
+const subTasks = new Map();
+
+export function norwegianSubtitles(videoId, info, auto, deps = {}) {
+  const key = `${videoId}.${auto ? 'a' : 'm'}`;
+  let task = subTasks.get(key);
+  if (!task) {
+    task = loadNorwegianSubtitles(videoId, info, auto, deps)
+      .catch((err) => {
+        log.warn(`${videoId}: subtitles failed: ${err.message}`);
+        return { srt: null, transient: true };
+      })
+      .finally(() => subTasks.delete(key));
+    subTasks.set(key, task);
+  }
+  return task;
+}
+
 // Tries the Norwegian subtitle plan best first (see subtitlePlan). YouTube often answers 429,
 // so a temporary failure is retried once; everything gives up after about 25 seconds.
-async function fetchNorwegianSubtitles(videoId, info, profile, infoPath, workDir, fetchSubtitle, deps = {}) {
+async function loadNorwegianSubtitles(videoId, info, auto, deps) {
+  const cached = await readSubCache(videoId, auto);
+  if (cached) return { srt: cached, how: 'from cache' };
+
+  const fetchSubtitle = deps.fetchSubtitle || defaultFetchSubtitle;
   const retryMs = deps.subtitleRetryMs ?? 5000;
   const translate = deps.translateCues || translateCues;
   const canTranslate = Boolean(deps.translateCues || translatorName());
-  const srtPath = path.join(workDir, 'sub.srt');
 
-  const cached = await readSubCache(videoId, profile.auto);
-  if (cached) {
-    await fsp.writeFile(srtPath, cached);
-    log.info(`${videoId}: Norwegian subtitles from cache`);
-    return { srtPath, transient: false };
-  }
-
-  const plan = subtitlePlan(info, { auto: profile.auto, translate: canTranslate });
+  const plan = subtitlePlan(info, { auto, translate: canTranslate });
   if (!plan.length) {
     const manual = Object.keys(info?.subtitles || {}).filter((k) => k !== 'live_chat');
-    const auto = Object.keys(info?.automatic_captions || {});
-    log.info(`${videoId}: no usable subtitle tracks (subtitles: ${manual.join(', ') || 'none'}; auto captions: ${auto.length ? auto.slice(0, 8).join(', ') + (auto.length > 8 ? ', …' : '') : 'none'})`);
+    const captions = Object.keys(info?.automatic_captions || {});
+    log.info(`${videoId}: no usable subtitle tracks (subtitles: ${manual.join(', ') || 'none'}; auto captions: ${captions.length ? captions.slice(0, 8).join(', ') + (captions.length > 8 ? ', …' : '') : 'none'})`);
+    return { srt: null, transient: false };
   }
 
+  // Its own folder: the build's folder may be gone before a slow subtitle arrives.
+  const dir = await fsp.mkdtemp(path.join(env.cacheDir, 'work', 'subs-'));
+  const infoPath = path.join(dir, 'info.json');
+  await fsp.writeFile(infoPath, JSON.stringify(info));
   const deadline = Date.now() + 25000;
   let transient = false;
-  for (const choice of plan) {
-    for (let attempt = 1; attempt <= 2 && Date.now() < deadline; attempt++) {
-      try {
-        const vtt = await fetchSubtitle(infoPath, choice.key, workDir);
-        let srt;
-        let count;
-        let how = choice.kind;
-        if (choice.translate) {
-          const cues = await translate(cleanCues(parseVtt(vtt || '')), undefined, info.title || '');
-          srt = cuesToSrt(cues);
-          count = cues.length;
-          how = `${choice.kind}, translated with ${deps.translateCues ? 'test translator' : translatorName()}`;
-        } else {
-          ({ srt, count } = vttToSrt(vtt || ''));
+  try {
+    for (const choice of plan) {
+      for (let attempt = 1; attempt <= 2 && Date.now() < deadline; attempt++) {
+        try {
+          const vtt = await fetchSubtitle(infoPath, choice.key, dir);
+          let srt;
+          let count;
+          let how = `"${choice.key}", ${choice.kind}`;
+          if (choice.translate) {
+            const cues = await translate(cleanCues(parseVtt(vtt || '')), undefined, info.title || '');
+            srt = cuesToSrt(cues);
+            count = cues.length;
+            how += `, translated with ${deps.translateCues ? 'test translator' : translatorName()}`;
+          } else {
+            ({ srt, count } = vttToSrt(vtt || ''));
+          }
+          if (count === 0) break; // empty track: try the next one
+          const humanNorwegian = choice.kind === 'manual' && !choice.translate;
+          await fsp.mkdir(path.dirname(subCachePath(videoId, true)), { recursive: true });
+          await fsp.writeFile(subCachePath(videoId, auto && !humanNorwegian), srt);
+          log.info(`${videoId}: Norwegian subtitles from ${how} (${count} lines)`);
+          return { srt, how };
+        } catch (err) {
+          const isTransient = err.transient ?? TRANSIENT.test(err.message);
+          transient ||= isTransient;
+          log.warn(`${videoId}: subtitles "${choice.key}"${choice.translate ? ' (to translate)' : ''} failed: ${err.message.split('\n')[0]}`);
+          if (!isTransient) break;
+          if (attempt === 1 && Date.now() + retryMs < deadline) await sleep(retryMs);
         }
-        if (count === 0) break; // empty track: try the next one
-        await fsp.writeFile(srtPath, srt);
-        await fsp.mkdir(path.dirname(subCachePath(videoId, true)), { recursive: true });
-        await fsp.writeFile(subCachePath(videoId, profile.auto && !(choice.kind === 'manual' && !choice.translate) ? true : false), srt);
-        log.info(`${videoId}: Norwegian subtitles from "${choice.key}" (${how}, ${count} lines)`);
-        return { srtPath, transient: false };
-      } catch (err) {
-        const isTransient = err.transient ?? TRANSIENT.test(err.message);
-        transient ||= isTransient;
-        log.warn(`${videoId}: subtitles "${choice.key}"${choice.translate ? ' (to translate)' : ''} failed: ${err.message.split('\n')[0]}`);
-        if (!isTransient) break;
-        if (attempt === 1 && Date.now() + retryMs < deadline) await new Promise((r) => setTimeout(r, retryMs));
       }
     }
+    return { srt: null, transient };
+  } finally {
+    fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
-  return { srtPath: null, transient };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -420,7 +505,7 @@ async function fetchNorwegianSubtitles(videoId, info, profile, infoPath, workDir
 export async function enforceCacheLimit() {
   const entries = [];
   for (const name of await fsp.readdir(env.cacheDir)) {
-    if (!name.endsWith('.mp4')) continue;
+    if (!name.endsWith('.mkv')) continue;
     const p = path.join(env.cacheDir, name);
     const st = await fsp.stat(p).catch(() => null);
     if (st) entries.push({ p, size: st.size, used: Math.max(st.atimeMs, st.mtimeMs) });
@@ -430,7 +515,7 @@ export async function enforceCacheLimit() {
   for (const e of entries) {
     if (total <= env.cacheMaxBytes) break;
     await fsp.rm(e.p, { force: true });
-    await fsp.rm(e.p.replace(/\.mp4$/, '.retry-subs'), { force: true });
+    await fsp.rm(e.p.replace(/\.mkv$/, '.retry-subs'), { force: true });
     total -= e.size;
     log.info(`cache: evicted ${path.basename(e.p)}`);
   }
@@ -461,7 +546,7 @@ export async function serveFile(req, res, file) {
   const now = new Date();
   fsp.utimes(file, now, st.mtime).catch(() => {}); // remember it was used, for the cache limit
   const range = req.headers.range ? parseRange(req.headers.range, st.size) : null;
-  const headers = { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=86400' };
+  const headers = { 'Content-Type': 'video/x-matroska', 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=86400' };
   if (range === 'invalid') {
     res.writeHead(416, { ...headers, 'Content-Range': `bytes */${st.size}` });
     return res.end();
@@ -480,7 +565,7 @@ export async function serveFile(req, res, file) {
 
 // Streams the part file while ffmpeg is still writing it.
 export async function serveGrowing(req, res, job) {
-  res.writeHead(200, { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-store', 'Accept-Ranges': 'none' });
+  res.writeHead(200, { 'Content-Type': 'video/x-matroska', 'Cache-Control': 'no-store', 'Accept-Ranges': 'none' });
   if (req.method === 'HEAD') return res.end();
   const fh = await fsp.open(job.partPath, 'r');
   let closed = false;
@@ -530,25 +615,42 @@ export async function serveGrowing(req, res, job) {
   else res.end();
 }
 
-export async function handlePlay(req, res, videoId, profileStr, profile, deps) {
+// A copy is usually done within a few seconds. When it will be, the first viewer is better off
+// waiting for the finished file: it has a duration and can be seeked in.
+async function finishesSoon(job, budgetMs) {
+  if (job.reencode || budgetMs <= 0) return job.encodeFinished;
+  const start = Date.now();
+  while (!job.encodeFinished && Date.now() - start < budgetMs) {
+    await sleep(150);
+    const elapsed = Date.now() - start;
+    if (job.expectedBytes && elapsed >= 600) {
+      const size = await fsp.stat(job.partPath).then((st) => st.size, () => 0);
+      const rate = size / (Date.now() - job.partAt + 1);
+      if (rate > 0 && (job.expectedBytes - size) / rate > budgetMs - elapsed) return false; // too slow: go live
+    }
+  }
+  return job.encodeFinished;
+}
+
+export async function handlePlay(req, res, videoId, profileStr, profile, deps = {}) {
   const key = cacheKey(videoId, profileStr);
   const file = finalPath(key);
-  // A trailer built without subtitles because YouTube refused them is rebuilt after a while;
-  // the old file stays until the new one replaces it.
-  if (fs.existsSync(file) && !getJob(key) && !(await needsRebuild(key))) return serveFile(req, res, file);
+  // A trailer built without subtitles is rebuilt once they are there; the old file stays until
+  // the new one replaces it.
+  if (fs.existsSync(file) && !getJob(key) && !(await needsRebuild(key, videoId, profile))) return serveFile(req, res, file);
 
   const job = startJob(videoId, profileStr, profile, deps);
   const range = req.headers.range ? /^bytes=(\d+)-/.exec(req.headers.range) : null;
   const fromStart = !range || Number(range[1]) === 0;
   try {
     if (fromStart) {
-      // First viewer: start playing while the file is being made.
       await job.partReady;
-      if (!job.encodeFinished || !fs.existsSync(file)) {
+      if (!(await finishesSoon(job, deps.finishWaitMs ?? env.finishWaitMs))) {
+        // Start playing while the file is being made.
         if (job.partPath && fs.existsSync(job.partPath)) return await serveGrowing(req, res, job);
       }
     }
-    // A seek into a file that is not finished yet: wait for it.
+    // A seek into a file that is not finished yet, or a file that is about to be: wait for it.
     await job.done;
     return serveFile(req, res, file);
   } catch (err) {

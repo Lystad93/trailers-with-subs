@@ -59,9 +59,10 @@
     <h2>Subtitles</h2>
     <label class="field"><span>How subtitles are shown</span>
       <select id="subs">
-        <option value="burn">Burned into the picture: always visible, works in every player</option>
-        <option value="soft">Subtitle track, on by default: no re-encoding, the player must support it</option>
+        <option value="soft">Subtitle track: fast, nothing is re-encoded (recommended)</option>
+        <option value="burn">Burned into the picture: slow, for players that ignore subtitle tracks</option>
       </select>
+      <small>In the AIOStreams app, set Norwegian as a subtitle language so the track is shown.</small>
     </label>
     <label class="row"><input type="checkbox" id="auto"><span><b>Allow machine-translated and auto-generated subtitles</b><small>Used when the video has no Norwegian subtitles made by a person. Human-made English subtitles translated to Norwegian come first (with Gemini if the server has a key, otherwise YouTube’s translation), then translated auto-captions.</small></span></label>
   </section>
@@ -79,7 +80,7 @@
         </select>
       </label>
     </div>
-    <small id="burnNote" class="warn" style="margin:-6px 0 14px">Burned-in subtitles re-encode the video. The server caps this at its BURN_MAX_HEIGHT (default 1080p).</small>
+    <small id="burnNote" class="warn" style="margin:-6px 0 14px">Burned-in subtitles re-encode the whole video, which is slow on a small server. The server caps this at its BURN_MAX_HEIGHT (default 1080p).</small>
     <label class="row"><input type="checkbox" id="yt"><span><b>Also list the plain YouTube video</b><small>Opens in Stremio’s own YouTube player, without the added subtitles.</small></span></label>
   </section>
 
@@ -131,7 +132,7 @@
     }
     const seg = Object.keys(cfg).length ? b64url(JSON.stringify(cfg)) + '/' : '';
     $('url').value = `${location.origin}/${seg}manifest.json`;
-    $('burnNote').style.display = $('subs').value === 'burn' && Number($('q').value) > 1080 ? 'block' : 'none';
+    $('burnNote').style.display = $('subs').value === 'burn' ? 'block' : 'none';
   }
   document.querySelectorAll('input,select').forEach((el) => el.addEventListener('input', update));
   $('copy').addEventListener('click', async () => {

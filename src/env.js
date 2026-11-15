@@ -60,6 +60,11 @@ export const env = {
   // TMDB is shared with AIOMetadata on the same IP, so stay well under its ~50 requests/second.
   tmdbRps: Math.max(1, num(process.env.TMDB_RPS, 20)),
   tmdbConcurrency: Math.max(1, num(process.env.TMDB_CONCURRENCY, 6)),
+  // How long a trailer waits for its subtitles before it starts without them (burn-in waits twice
+  // as long). Late subtitles are finished in the background and used from the next play.
+  subWaitMs: num(process.env.SUB_WAIT_MS, 10000),
+  // How long the first viewer waits for a copy that is about to finish, to get a seekable file.
+  finishWaitMs: num(process.env.FINISH_WAIT_MS, 3000),
   logLevel: process.env.LOG_LEVEL || 'info',
   // Translate subtitles ourselves instead of asking YouTube (whose translations are rate limited).
   geminiKey: (process.env.GEMINI_API_KEY || '').trim(),

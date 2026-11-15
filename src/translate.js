@@ -91,6 +91,24 @@ const GEMINI_INSTRUCTIONS = [
   'If a line is already Norwegian, or is only a sound or music cue, return it unchanged.',
 ].join(' ');
 
+// "Thinking" adds seconds a subtitle translation does not need. Models that cannot turn it off
+// reject the setting; then it is left out from there on.
+let thinkingOff = true;
+
+async function geminiRequest(url, body, fetchImpl) {
+  const headers = { 'x-goog-api-key': env.geminiKey };
+  if (thinkingOff) {
+    try {
+      const fast = { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: { thinkingBudget: 0 } } };
+      return await postJson(url, fast, headers, fetchImpl);
+    } catch (err) {
+      if (!/HTTP 400/.test(err.message) || !/think|budget/i.test(err.message)) throw err;
+      thinkingOff = false;
+    }
+  }
+  return postJson(url, body, headers, fetchImpl);
+}
+
 async function gemini(texts, fetchImpl, context) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.geminiModel)}:generateContent`;
   const prompt = (context ? `Trailer: ${context}\n` : '') + `Lines (${texts.length}):\n${JSON.stringify(texts)}`;
@@ -105,7 +123,7 @@ async function gemini(texts, fetchImpl, context) {
   };
   // A model sometimes returns the wrong number of lines: ask once more before giving up.
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const data = await postJson(url, body, { 'x-goog-api-key': env.geminiKey }, fetchImpl);
+    const data = await geminiRequest(url, body, fetchImpl);
     const candidate = data?.candidates?.[0];
     const text = (candidate?.content?.parts || []).map((p) => p.text || '').join('');
     let parsed = null;

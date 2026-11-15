@@ -65,7 +65,7 @@ function aioToStream(raw) {
 }
 
 test('manifest advertises a stream resource for movies and series', async () => {
-  for (const p of ['/manifest.json', `/${encodeConfig({ subs: 'soft' })}/manifest.json`]) {
+  for (const p of ['/manifest.json', `/${encodeConfig({ subs: 'burn' })}/manifest.json`]) {
     const m = await (await fetch(base + p)).json();
     assert.ok(m.resources.includes('stream'));
     assert.deepEqual(m.types, ['movie', 'series']);
@@ -81,21 +81,21 @@ test('stream response is what AIOMetadata expects, and links play', async () => 
   assert.equal(parsed.length, 2);
   assert.ok(parsed.every(Boolean));
   assert.equal(parsed[0].title, '🇳🇴 Norsk trailer — DUNE - Offisiell trailer (norsk tekst)');
-  assert.match(parsed[0].url, /\/play\/NOduneNO001\/no\.1080\.h264\/[\w-]{16}\.mp4$/);
+  assert.match(parsed[0].url, /\/play\/NOduneNO001\/no\.1080\.h264\/[\w-]{16}\.mkv$/);
   assert.equal(parsed[1].title, '🇬🇧 Engelsk · norsk tekst — Official Main Trailer');
-  assert.match(parsed[1].url, /\/play\/n9xhJrPXop4\/sub\.1080\.h264\.burn\.a\/[\w-]{16}\.mp4$/);
+  assert.match(parsed[1].url, /\/play\/n9xhJrPXop4\/sub\.1080\.h264\.soft\.a\/[\w-]{16}\.mkv$/);
   assert.ok(tmdbCalls.every((u) => u.searchParams.get('api_key') === 'server-key'));
 
   // Tampering with the profile breaks the signature.
-  const forged = parsed[1].url.replace('sub.1080.h264.burn.a', 'sub.2160.any.burn.a');
+  const forged = parsed[1].url.replace('sub.1080.h264.soft.a', 'sub.2160.any.soft.a');
   assert.equal((await fetch(forged)).status, 403);
 });
 
 test('settings in the URL change the result', async () => {
-  const cfg = encodeConfig({ first: 'sub', yt: true, subs: 'soft', q: 2160, codec: 'any', tmdb: 'user-key' });
+  const cfg = encodeConfig({ first: 'sub', yt: true, subs: 'burn', q: 2160, codec: 'any', tmdb: 'user-key' });
   const { streams } = await (await fetch(`${base}/${cfg}/stream/movie/tt1160419.json`)).json();
   assert.equal(streams.length, 4);
-  assert.match(streams[0].url, /sub\.2160\.any\.soft\.a/);
+  assert.match(streams[0].url, /sub\.2160\.any\.burn\.a/);
   assert.equal(streams[1].ytId, 'n9xhJrPXop4');
   assert.match(streams[2].url, /no\.2160\.any/);
   // TMDB answers are shared between users, so no second lookup was needed.
@@ -117,9 +117,9 @@ test('when TMDB keeps failing, answer with an error so AIOMetadata asks again la
 });
 
 test('configure page renders with the settings filled in', async () => {
-  const cfg = encodeConfig({ subs: 'soft' });
+  const cfg = encodeConfig({ subs: 'burn' });
   const html = await (await fetch(`${base}/${cfg}/configure`)).text();
   assert.match(html, /Norske trailere/);
-  assert.match(html, /const CONFIG = \{[^<]*"subs":"soft"/);
+  assert.match(html, /const CONFIG = \{[^<]*"subs":"burn"/);
   assert.doesNotMatch(html, /__CONFIG__|__DEFAULTS__|__SERVER_HAS_TMDB__/);
 });

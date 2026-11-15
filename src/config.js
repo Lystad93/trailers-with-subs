@@ -6,7 +6,7 @@ export const DEFAULTS = Object.freeze({
   sub: true, // list English/original-language trailers with Norwegian subtitles
   maxNo: 2, // at most this many Norwegian trailers
   maxSub: 2, // at most this many subtitled trailers
-  subs: 'burn', // burn (burned into the picture, works in every player) | soft (selectable track, no re-encode)
+  subs: 'soft', // soft (a subtitle track, no re-encode: fast) | burn (burned into the picture: slow, works in every player)
   auto: true, // allow YouTube's auto-translated / auto-generated Norwegian subtitles
   search: 'family', // off | family | all: search YouTube for Norwegian dubs TMDB does not know
   q: 1080, // max height: 720 | 1080 | 1440 | 2160

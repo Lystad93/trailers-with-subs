@@ -35,6 +35,14 @@ To update to a newer version of the addon later:
 docker compose --profile trailers-with-subs build --pull --no-cache && docker compose --profile trailers-with-subs up -d
 ```
 
+## Checking that it works
+
+Build one trailer by hand. It prints each step, how long it took, and what failed:
+
+```bash
+docker exec trailers-with-subs node src/selftest.js <YouTube id or link>
+```
+
 ## YouTube on a VPS
 
 YouTube often answers datacenter IPs (Oracle included) with *"Sign in to confirm you're not a bot"*.

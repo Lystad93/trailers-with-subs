@@ -18,22 +18,38 @@ Every trailer is fetched in the **best quality YouTube has**: separate video and
 ## Why the subtitles are inside the video
 
 AIOMetadata keeps only a trailer's `title` and its `url` (or YouTube id). Any subtitle
-list an addon sends is dropped, and Stremio's YouTube player cannot be told to show
-Norwegian captions. So the addon builds the video itself:
+list an addon sends is dropped, and a player's YouTube playback cannot be told to show
+Norwegian captions. So the addon serves the video itself:
 
 ```
 AIOMetadata ──/stream/movie/tt…json──▶ addon ──TMDB──▶ which trailers exist
-player ──/play/<id>/<profile>/<sig>.mp4──▶ addon ──yt-dlp──▶ best video + audio + Norwegian subs
-                                             └─ffmpeg──▶ MP4 with subtitles (burned in, or a default track)
+player ──/play/<id>/<profile>/<sig>.mkv──▶ addon ──yt-dlp──▶ best video + audio   ┐ at the same time
+                                             ├─ Norwegian subtitles (translated)  ┘
+                                             └─ffmpeg──▶ MKV, copied without re-encoding
 ```
 
-- **Burned in** (default): the text is part of the picture, so it shows in every player
-  (Stremio, Nuvio, Jellyfin, Apple TV …). The video is re-encoded with x264 (CRF 20, capped at 1080p by default).
-- **Soft**: a Norwegian subtitle track marked *default*. There's no re-encode, so it's faster and keeps the
-  original picture, but the player has to honour the default flag.
+- **Subtitle track** (default): YouTube's video and audio are copied as they are into an MKV, next to a
+  Norwegian subtitle track marked *default* with the language `nor`. Nothing is re-encoded, so the
+  server does very little work and the picture is YouTube's own. The player has to show the track:
+  the AIOStreams app picks it by your subtitle language, and Stremio and most players follow the default flag.
+- **Burned in**: the text becomes part of the picture, for players that ignore subtitle tracks. The
+  whole video is re-encoded with x264 (CRF 20, capped at 1080p by default), which is slow on a small server.
 
-The first viewer gets the trailer as soon as ffmpeg starts writing, usually after 3–8 seconds.
-After that the finished file is served from the disk cache with seeking (HTTP ranges).
+The download starts as soon as YouTube has answered, while the subtitles are fetched and
+translated. A copy is normally complete a few seconds later and is served as a finished, seekable
+file; a slow one is streamed while it is written. Subtitles get `SUB_WAIT_MS` (10 seconds) to
+arrive. If they are later than that, the trailer starts without them, they are finished in the
+background, and the next play has them. Finished trailers are served from the disk cache.
+
+## Which apps this works in
+
+- **AIOStreams app (Android TV, desktop, web)**: plays the addon's links with its own player and
+  lists them first. Set *Norwegian* as a subtitle language and the subtitle mode to *Smart* or
+  *Always* in the app's playback settings.
+- **Stremio**: plays the links; the subtitle track is on by default.
+- **Nuvio**: does not work. Nuvio only reads YouTube ids from a title's trailers and plays those
+  with its own YouTube player, so it never opens this addon's links. Turning on *Also list the plain
+  YouTube video* at least gives Nuvio the Norwegian dubbed trailers the addon found.
 
 ## Quick start (Docker)
 
@@ -83,7 +99,7 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 | Max per group | 2 / 2 | |
 | Show first | Norwegian | Which group comes first. The first trailer is what the *Trailer* button plays |
 | Find Norwegian dubs on YouTube | animation & family | `off`, `family` or `all`. Searches are rate-limited and cached for 7 days |
-| How subtitles are shown | burned in | `burn` or `soft` |
+| How subtitles are shown | subtitle track | `soft` (a subtitle track, no re-encoding) or `burn` (burned into the picture, slow) |
 | Allow YouTube's translated / auto subtitles | on | Off = only Norwegian subtitles made by a person |
 | Max resolution | 1080 | 480 to 2160 |
 | Video codec | H.264 | `h264` plays everywhere (YouTube has it up to 1080p); `any` = best VP9/AV1 up to 4K |
@@ -99,6 +115,8 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 | `CACHE_DIR` | `/data/cache` | Finished trailers |
 | `CACHE_MAX_GB` | `10` | Least recently watched files are removed first |
 | `MAX_JOBS` | `2` | Trailers prepared at the same time |
+| `SUB_WAIT_MS` | `10000` | How long a trailer waits for its subtitles before starting without them (twice as long for burn-in) |
+| `FINISH_WAIT_MS` | `3000` | How long the first viewer waits for a copy that is about to finish, to get a seekable file |
 | `BURN_MAX_HEIGHT` | `1080` | Highest resolution for burned-in subtitles (re-encoding 4K is slow) |
 | `BURN_PRESET` / `BURN_CRF` | `veryfast` / `20` | x264 settings for burned-in subtitles |
 | `SUB_FONT` / `SUB_FONT_SIZE` | `DejaVu Sans` / `18` | Burned-in subtitle style (the size is relative to a 288-line canvas) |
@@ -125,8 +143,14 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
   refuses, plays the trailer without subtitles and tries again 30 minutes later.
 - **No subtitles on a trailer.** The video has no captions at all (music-only trailers), or you have turned off
   auto-generated subtitles. The trailer still plays. The logs say which track was used.
-- **The first play doesn't start on Apple devices.** AVPlayer insists on byte ranges, which a trailer still being made
-  can't offer. Opening it again a few seconds later plays the cached file.
+- **A trailer is slow to start, or doesn't start.** Build one by hand and read what it says. It
+  prints each step, how long it took and what failed:
+  ```bash
+  docker exec trailers-with-subs node src/selftest.js <YouTube id or link>
+  ```
+- **The first play has no subtitles, the second has.** The subtitles took longer than `SUB_WAIT_MS`.
+- **Subtitles don't show in the AIOStreams app.** Add Norwegian to the app's subtitle languages; with
+  the mode *Only forced* or *None* the track is not shown.
 - **Changes don't show up.** AIOMetadata caches trailer lists for 24 hours (`TRAILER_ADDON_TTL`).
 - **Lots of requests when AIOMetadata starts.** Its catalog warm-up asks about every title at once. TMDB
   calls are queued and rate limited, and when TMDB still fails the addon answers with an error
@@ -139,6 +163,6 @@ npm test
 ```
 
 The tests cover subtitle clean-up, format and subtitle choice, the TMDB logic, the
-HTTP API in the shape AIOMetadata reads, and the whole ffmpeg pipeline: streaming while building,
-burned-in and soft subtitles, range requests, and failing on a lost audio track. They use
-synthetic media instead of YouTube.
+HTTP API in the shape AIOMetadata reads, and the whole ffmpeg pipeline: streaming a file that is
+still being written, subtitle tracks and burned-in subtitles, slow and refused subtitles, range
+requests, and failing on a lost audio track. They use synthetic media instead of YouTube.

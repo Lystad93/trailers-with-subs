@@ -50,13 +50,13 @@ export async function buildStreams(type, id, config, origin, deps = {}) {
   if (trailers.partial) streams.partial = true;
   for (const t of trailers) {
     const profile = makeProfile(t.mode, config);
-    const url = `${origin}/play/${t.videoId}/${profile}/${sign(t.videoId, profile)}.mp4`;
+    const url = `${origin}/play/${t.videoId}/${profile}/${sign(t.videoId, profile)}.mkv`;
     const title = `${t.label} — ${t.name}`;
     streams.push({
       name: t.mode === 'no' ? '🇳🇴 Trailer' : '🇳🇴 Tekstet',
       title,
       url,
-      behaviorHints: { bingeGroup: `trailers-${t.mode}`, notWebReady: false },
+      behaviorHints: { bingeGroup: `trailers-${t.mode}`, notWebReady: true },
     });
     if (config.yt) streams.push({ name: 'YouTube', title: `${t.label.replace(' · norsk tekst', '')} — ${t.name} (YouTube)`, ytId: t.videoId });
   }
@@ -80,10 +80,10 @@ async function route(req, res) {
 
   if (parts[0] === 'health') return json(res, 200, { ok: true, version: pkg.version });
 
-  // /play/<videoId>/<profile>/<sig>.mp4
+  // /play/<videoId>/<profile>/<sig>.mkv
   if (parts[0] === 'play' && parts.length === 4) {
     const [, videoId, profileStr, sigFile] = parts;
-    const sig = sigFile.replace(/\.mp4$/, '');
+    const sig = sigFile.replace(/\.(mkv|mp4)$/, ''); // .mp4 links from before 2.0 may still be cached
     const profile = parseProfile(profileStr);
     if (!YT_ID.test(videoId) || !profile || sig !== sign(videoId, profileStr)) {
       res.writeHead(403, { 'Content-Type': 'text/plain' });

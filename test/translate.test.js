@@ -37,6 +37,22 @@ test('Gemini gets the lines as JSON and must answer with a JSON array of the sam
   assert.match(calls[0].body.contents[0].parts[0].text, /^Trailer: Dune: Part Two/);
 });
 
+test('thinking is switched off for speed, and left alone for models that refuse that', async () => {
+  let n = 0;
+  const { fetchImpl, calls } = fakeGemini((lines) => {
+    n++;
+    if (n === 2) return { ok: false, status: 400, json: async () => ({ error: { message: 'Budget 0 is invalid. This model only works in thinking mode.' } }) };
+    return reply(lines.map((l) => `NO:${l}`));
+  });
+  await translateTexts(['a'], fetchImpl);
+  assert.deepEqual(calls[0].body.generationConfig.thinkingConfig, { thinkingBudget: 0 });
+  assert.deepEqual(await translateTexts(['b'], fetchImpl), ['NO:b']); // refused, then sent again without
+  assert.equal(calls[2].body.generationConfig.thinkingConfig, undefined);
+  await translateTexts(['c'], fetchImpl);
+  assert.equal(calls.length, 4);
+  assert.equal(calls[3].body.generationConfig.thinkingConfig, undefined);
+});
+
 test('a reply with the wrong number of lines is asked again, then given up on', async () => {
   const flaky = fakeGemini((lines, n) => reply(n === 1 ? ['only one'] : lines.map((l) => `NO:${l}`)));
   assert.deepEqual(await translateTexts(['a', 'b'], flaky.fetchImpl), ['NO:a', 'NO:b']);
