@@ -171,7 +171,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let refreshing = null;
 
 /** Fetches every channel's list: all of it the first time, only the newest videos after that. */
-export function refreshChannels({ gapMs = 5000, list = listChannel } = {}) {
+export function refreshChannels({ gapMs = 5000, list = listChannel, onlyMissing = false } = {}) {
   if (refreshing) return refreshing;
   refreshing = (async () => {
     await loadIndex();
@@ -179,6 +179,7 @@ export function refreshChannels({ gapMs = 5000, list = listChannel } = {}) {
     let failed = 0;
     for (const channel of configuredChannels()) {
       const known = index.channels[channel.id];
+      if (onlyMissing && known?.videos.length) continue;
       try {
         // The whole list the first time and once a week (channels remove old videos); in between
         // only the newest.
@@ -203,7 +204,7 @@ export function refreshChannels({ gapMs = 5000, list = listChannel } = {}) {
       await sleep(gapMs);
     }
     const status = indexStatus();
-    log.info(`Nordic cinema channels: ${status.videos} videos from ${status.channels} channels (${added} new${failed ? `, ${failed} channels failed` : ''})`);
+    log.info(`Nordic cinema channels: ${status.videos} videos from ${status.channels} channels (${added} new${onlyMissing ? ' from newly added channels' : ''}${failed ? `, ${failed} channels failed` : ''})`);
     return status;
   })().finally(() => {
     refreshing = null;
@@ -219,7 +220,16 @@ export async function startChannelIndex() {
   const run = () => refreshChannels().catch((err) => log.warn(`channel refresh: ${err.message}`));
   const age = status.refreshed ? Date.now() - Date.parse(status.refreshed) : Infinity;
   const every = env.channelRefreshHours * 60 * 60 * 1000;
-  setTimeout(run, age > every ? 5000 : every - age).unref();
+  // Channels added since the list was saved are listed right away, not at the next refresh.
+  const missing = configuredChannels().filter((c) => !index.channels[c.id]?.videos.length);
+  if (age > every) setTimeout(run, 5000).unref();
+  else {
+    if (missing.length) {
+      log.info(`Listing ${missing.length} channels that are not on file yet: ${missing.map((c) => c.name).join(', ')}`);
+      setTimeout(() => refreshChannels({ onlyMissing: true }).catch((err) => log.warn(`channel refresh: ${err.message}`)), 5000).unref();
+    }
+    setTimeout(run, every - age).unref();
+  }
   setInterval(run, every).unref();
 }
 

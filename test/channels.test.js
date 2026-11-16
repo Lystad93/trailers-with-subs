@@ -89,6 +89,15 @@ test('channel trailers are found, dated and ranked', () => {
   assert.equal(findChannelTrailers({ title: 'Monster', originalTitle: 'Monster', norwegianTitle: '', date: '2022-09-21', tmdbType: 'tv' }).length, 0);
 });
 
+test('only the channels that are not on file yet can be listed', async () => {
+  const first = DEFAULT_CHANNELS[0];
+  setIndexForTests({ channels: { [first.id]: { name: first.name, fetchedAt: Date.now(), deepAt: Date.now(), videos: [video('eeeeeeeeee1', 'X | Trailer', '2025-01-01')] } } });
+  const asked = [];
+  await refreshChannels({ gapMs: 0, onlyMissing: true, list: async (c) => (asked.push(c.id), { name: c.name, videos: [] }) });
+  assert.ok(!asked.includes(first.id));
+  assert.equal(asked.length, configuredChannels().length - 1);
+});
+
 test('Danish and Swedish cinema trailers come after the Norwegian ones', () => {
   setIndexForTests({
     channels: {
