@@ -21,7 +21,8 @@ export const DEFAULT_CHANNELS = [
   { id: 'UCmwC_TxY0S8TfY7RYtAtoEg', name: 'Mer Film' },
   { id: 'UCzB8Ol8MEPJhjWXz1EngGIw', name: 'Another World Entertainment Norway' },
   { id: 'UCjQX_J3Jo53HAJGJu4CJy3w', name: 'Fidalgo Films' },
-  { id: 'UC8C3teVwucjcg7skFUHtPEw', name: 'Filmweb' },
+  // Filmweb also re-posts trailers without Norwegian text: only its marked ones count.
+  { id: 'UC8C3teVwucjcg7skFUHtPEw', name: 'Filmweb', marked: true },
 ];
 
 // CHANNELS_EXTRA: more channels, as channel ids (UC…) or @handles, separated by commas.
@@ -71,7 +72,8 @@ export function filmNameOf(videoTitle) {
 
 const TRAILER = /\b(trailer|teaser|teasertrailer|hovedtrailer)\b/i;
 const DUBBED = /norsk\s*tale|norske\s*stemmer|dubb/i;
-const TEXTED = /norsk\s*tekst|tekstet/i;
+const TEXTED = /norsk\s*tekst|(?<!u)tekstet/i;
+const UNTEXTED = /utekstet|uten\s+tekst/i;
 const NOT_A_TRAILER = /\b(featurette|bak kulissene|behind the scenes|intervju|interview|klipp|clip|musikkvideo|lyric|premierefest|reaction)\b/i;
 
 /** Does this channel video show a trailer for a film with one of these names? */
@@ -207,14 +209,21 @@ export function findChannelTrailers(data, { preferDubbed = false } = {}) {
   const names = [...new Set([data.norwegianTitle, data.title, data.originalTitle].filter(Boolean))];
   const released = data.date ? Date.parse(data.date) : NaN;
   const found = [];
+  const onlyMarked = new Set(configuredChannels().filter((c) => c.marked).map((c) => c.name));
   for (const channel of Object.values(index.channels)) {
     for (const v of channel.videos) {
       if (v.duration && (v.duration < 25 || v.duration > 330)) continue; // ten-second spots, full films
-      if (!matchesFilm(v.title, names)) continue;
+      if (!matchesFilm(v.title, names) || UNTEXTED.test(v.title)) continue;
+      if (onlyMarked.has(channel.name) && !DUBBED.test(v.title) && !TEXTED.test(v.title)) continue;
+      if (data.tmdbType !== 'movie' && /på kino|i kinoene|kinopremiere/i.test(v.title)) continue; // a cinema film, not the series
       // Keep remakes and same-named films apart: a trailer comes out around its film.
       if (v.ts && !Number.isNaN(released)) {
         const at = v.ts * 1000;
-        if (data.tmdbType === 'movie' ? at < released - 2 * 365 * DAY || at > released + 2 * 365 * DAY : at < released - 2 * 365 * DAY) continue;
+        // A film's trailer comes out within a year and a half of it, either side (festival films
+        // reach Norway late). For a series only its launch counts: a later cinema film often
+        // shares the name.
+        const [before, after] = data.tmdbType === 'movie' ? [550, 550] : [365, 365];
+        if (at < released - before * DAY || at > released + after * DAY) continue;
       }
       if (found.some((f) => f.id === v.id)) continue;
       found.push({ ...v, channel: channel.name, dubbed: DUBBED.test(v.title), texted: TEXTED.test(v.title), teaser: /teaser/i.test(v.title) });

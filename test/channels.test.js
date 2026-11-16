@@ -73,6 +73,20 @@ test('channel trailers are found, dated and ranked', () => {
   const lion = (date) => ({ title: 'The Lion King', originalTitle: 'The Lion King', norwegianTitle: 'Løvenes konge', date, tmdbType: 'movie' });
   assert.equal(findChannelTrailers(lion('2019-07-12')).length, 1);
   assert.equal(findChannelTrailers(lion('1994-06-24')).length, 0);
+
+  // Unsubtitled uploads are left out; a series does not get the cinema film of the same name.
+  setIndexForTests({
+    channels: {
+      a: { name: 'UIP', videos: [video('cccccccccc1', 'Speak No Evil | Offisiell trailer (utekstet)', '2024-06-01'), video('cccccccccc2', 'Speak No Evil | Offisiell trailer', '2024-06-01'), video('cccccccccc3', 'Speak No Evil - trailer - På kino 16. september', '2022-08-01')] },
+      b: { name: 'Warner', videos: [video('cccccccccc4', 'The Flash – Offisiell trailer', '2023-02-13'), video('cccccccccc5', 'Monster - trailer - På kino 19. april', '2023-03-01')] },
+      c: { name: 'Filmweb', videos: [video('cccccccccc6', 'Speak No Evil Trailer #1 (2024) | Filmweb Trailers', '2024-06-01'), video('cccccccccc7', 'Speak No Evil - Trailer (norsk tekst)', '2024-06-02')] },
+    },
+  });
+  const sne = (date) => ({ title: 'Speak No Evil', originalTitle: 'Speak No Evil', norwegianTitle: '', date, tmdbType: 'movie' });
+  assert.deepEqual(findChannelTrailers(sne('2024-09-11')).map((v) => v.id), ['cccccccccc7', 'cccccccccc2']);
+  assert.deepEqual(findChannelTrailers(sne('2022-03-17')).map((v) => v.id), ['cccccccccc3']);
+  assert.equal(findChannelTrailers({ title: 'The Flash', originalTitle: 'The Flash', norwegianTitle: '', date: '2014-10-07', tmdbType: 'tv' }).length, 0);
+  assert.equal(findChannelTrailers({ title: 'Monster', originalTitle: 'Monster', norwegianTitle: '', date: '2022-09-21', tmdbType: 'tv' }).length, 0);
 });
 
 test('channel lists are fetched, merged with what is on file, and saved', async () => {

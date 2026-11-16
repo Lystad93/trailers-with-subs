@@ -67,8 +67,12 @@ export async function buildStreams(type, id, config, origin, deps = {}) {
     if (config.yt) streams.push({ name: 'YouTube', title: `${t.label.replace(' · norsk tekst', '')} — ${t.name} (YouTube)`, ytId: t.videoId });
   }
   // What was found, so the log shows which trailers a title was given.
-  const lines = streams.map((st, i) => `  ${i + 1}. ${st.title} [${st.ytId ? `YouTube ${st.ytId}` : `served by the addon, ${/\/play\/([\w-]{11})\//.exec(st.url)?.[1]}`}]`);
-  log.info(`${type}/${id} ${trailers.film || ''}: ${streams.length ? `${streams.length} trailers\n${lines.join('\n')}` : 'no trailers'}`);
+  // One line per title with what was found; the full list at LOG_LEVEL=debug.
+  const norwegian = trailers.filter((t) => t.mode === 'no');
+  const others = trailers.length - norwegian.length;
+  const summary = [norwegian.length ? `Norwegian: ${norwegian.map((t) => `${t.name} [${t.videoId}]`).join('; ')}` : 'no Norwegian trailer', `${others} with translated subtitles`].join(' · ');
+  log.info(`${trailers.film || `${type}/${id}`} (${id}): ${trailers.length ? summary : 'no trailers'}`);
+  log.debug(streams.map((st, i) => `  ${i + 1}. ${st.title} [${st.ytId ? `YouTube ${st.ytId}` : 'served by the addon'}]`).join('\n'));
   return streams;
 }
 
