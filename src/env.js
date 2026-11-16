@@ -65,6 +65,11 @@ export const env = {
   subWaitMs: num(process.env.SUB_WAIT_MS, 10000),
   // How long the first viewer waits for a copy that is about to finish, to get a seekable file.
   finishWaitMs: num(process.env.FINISH_WAIT_MS, 3000),
+  // The index of Norwegian distributors' YouTube channels: how often it is refreshed, how many
+  // videos per channel the first time, and how many on each refresh after that.
+  channelRefreshHours: Math.max(1, num(process.env.CHANNEL_REFRESH_HOURS, 12)),
+  channelDepth: num(process.env.CHANNEL_DEPTH, 1500),
+  channelRecent: num(process.env.CHANNEL_RECENT, 60),
   logLevel: process.env.LOG_LEVEL || 'info',
   // Translate subtitles ourselves instead of asking YouTube (whose translations are rate limited).
   geminiKey: (process.env.GEMINI_API_KEY || '').trim(),

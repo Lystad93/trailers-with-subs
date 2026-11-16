@@ -12,7 +12,8 @@ export function baseArgs() {
   return [...args, ...env.ytdlpArgs];
 }
 
-export function runYtdlp(args, { timeoutMs = 60000 } = {}) {
+// allowPartial: a long listing that YouTube cuts short still prints what it got; accept that.
+export function runYtdlp(args, { timeoutMs = 60000, allowPartial = false } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(env.ytdlp, [...baseArgs(), ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
@@ -26,7 +27,7 @@ export function runYtdlp(args, { timeoutMs = 60000 } = {}) {
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve({ stdout, stderr });
+      if (code === 0 || (allowPartial && stdout.trim().startsWith('{'))) resolve({ stdout, stderr });
       else reject(new Error(`yt-dlp exited ${code}: ${stderr.trim().split('\n').slice(-2).join(' ')}`));
     });
   });

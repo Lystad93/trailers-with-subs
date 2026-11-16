@@ -1,6 +1,9 @@
 import { resolveTmdb, getTitleData } from './tmdb.js';
 import { searchYoutube, SearchSkipped, YT_ID } from './youtube.js';
 import { log, logThrottled } from './env.js';
+import { findChannelTrailers, indexReady, normalizeTitle } from './channels.js';
+
+export { normalizeTitle };
 
 export const NO_LANGS = new Set(['no', 'nb', 'nn']);
 const ANIMATION = 16;
@@ -19,14 +22,6 @@ export function rankVideos(videos) {
       String(b.published_at || '').localeCompare(String(a.published_at || '')) ||
       (b.size || 0) - (a.size || 0)
   );
-}
-
-export function normalizeTitle(s) {
-  return String(s || '')
-    .toLowerCase()
-    .normalize('NFKC')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim();
 }
 
 const DUB_HINT = /norsk\s*tale|norske\s*stemmer|dubb|norwegian\s*(voices|dub)|norsk\s*versjon|norsk\s*dub/i;
@@ -78,7 +73,7 @@ async function searchDubs(data, limit) {
  * Finds the trailers to offer for a title.
  * Returns [{ videoId, mode: 'no'|'sub', label, name }], in the configured order.
  */
-export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searchBudgetMs = 3500, search = searchDubs } = {}) {
+export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searchBudgetMs = 3500, search = searchDubs, channelTrailers = findChannelTrailers, channelsReady = indexReady } = {}) {
   const key = config.tmdb || tmdbKey;
   const target = await resolveTmdb(type, id, key, fetchImpl);
   if (!target) return [];
@@ -90,17 +85,30 @@ export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searc
   const noVideos = config.no ? ranked.filter(isNo).slice(0, config.maxNo) : [];
   const norwegianFilm = NO_LANGS.has(data.originalLanguage);
 
-  const no = noVideos.map((v) => ({ videoId: v.key, mode: 'no', label: noLabel(v.name, data), name: v.name || 'Trailer' }));
-
-  // Look for Norwegian dubs on YouTube when TMDB has none.
+  const family = data.genres.includes(ANIMATION) || data.genres.includes(FAMILY);
   let partial = false;
+  let no = [];
+  if (config.no && config.kino) {
+    // Norwegian distributors' own uploads come first: Norwegian text is already in the picture.
+    for (const v of channelTrailers(data, { preferDubbed: family })) {
+      const label = v.dubbed ? '🇳🇴 Norsk tale' : norwegianFilm ? '🇳🇴 Norsk trailer' : v.texted ? '🇳🇴 Norsk tekst' : '🇳🇴 Norsk kinotrailer';
+      no.push({ videoId: v.id, mode: 'no', label, name: `${v.title} (${v.channel})` });
+    }
+    if (!channelsReady()) partial = true; // the channel lists are still being fetched
+  }
+  for (const v of noVideos) {
+    if (!no.some((n) => n.videoId === v.key)) no.push({ videoId: v.key, mode: 'no', label: noLabel(v.name, data), name: v.name || 'Trailer' });
+  }
+  no = no.slice(0, config.maxNo);
+
+  // Look for Norwegian dubs on YouTube when neither the channels nor TMDB have a Norwegian trailer.
   const searchWanted =
     config.no &&
-    config.maxNo > no.length &&
+    no.length === 0 &&
     !norwegianFilm &&
-    (config.search === 'all' || (config.search === 'family' && (data.genres.includes(ANIMATION) || data.genres.includes(FAMILY))));
+    (config.search === 'all' || (config.search === 'family' && family));
   if (searchWanted) {
-    const job = search(data, config.maxNo - no.length).catch((err) => {
+    const job = search(data, config.maxNo).catch((err) => {
       if (err instanceof SearchSkipped) log.debug(`YouTube search skipped for ${id}: ${err.message}`);
       else logThrottled('yt-search-failed', 60000, 'warn', `YouTube search failed for ${id}: ${err.message}`);
       return SKIPPED;

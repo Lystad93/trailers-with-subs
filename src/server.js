@@ -8,6 +8,7 @@ import { findTrailers } from './trailers.js';
 import { initMedia, sign, handlePlay } from './media.js';
 import { Memo } from './memo.js';
 import { YT_ID } from './youtube.js';
+import { startChannelIndex, indexStatus } from './channels.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'));
@@ -78,7 +79,7 @@ async function route(req, res) {
   const url = new URL(req.url, 'http://x');
   const parts = url.pathname.split('/').filter(Boolean);
 
-  if (parts[0] === 'health') return json(res, 200, { ok: true, version: pkg.version });
+  if (parts[0] === 'health') return json(res, 200, { ok: true, version: pkg.version, norwegianChannels: indexStatus() });
 
   // /play/<videoId>/<profile>/<sig>.mkv
   if (parts[0] === 'play' && parts.length === 4) {
@@ -146,6 +147,7 @@ export function createServer() {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await initMedia();
+  await startChannelIndex();
   createServer().listen(env.port, () => {
     log.info(`Norske trailere v${pkg.version} listening on :${env.port}`);
     log.info(`Configure at ${env.baseUrl || `http://localhost:${env.port}`}/configure`);

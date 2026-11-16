@@ -68,25 +68,42 @@ test('finds Norwegian dub and English trailers for a movie', async () => {
     },
   });
   let searched = 0;
-  const search = async (data, limit) => {
+  const search = async () => {
     searched++;
-    assert.equal(data.norwegianTitle, 'Frost 2');
-    assert.equal(limit, 1);
     return [{ id: 'NOsearch001', title: 'FROST 2 - Offisiell trailer - Norsk tale', duration: 120 }];
   };
-  const out = await findTrailers('movie', 'tt2953050', normalizeConfig({ tmdb: 'k' }), { fetchImpl, search });
-  assert.equal(searched, 1);
+  // The Norwegian distributor's own uploads come first, then what TMDB lists as Norwegian.
+  const channelTrailers = (data, { preferDubbed }) => {
+    assert.equal(data.norwegianTitle, 'Frost 2');
+    assert.equal(data.date, '2019-11-20');
+    assert.equal(preferDubbed, true);
+    return [
+      { id: 'KINOtale001', title: 'Frost 2 | Offisiell trailer | Norsk tale', channel: 'Disney Norge', dubbed: true, texted: false },
+      { id: 'NOnorsk0001', title: 'Frost 2 | Ny trailer | Norsk tale', channel: 'Disney Norge', dubbed: true, texted: false },
+      { id: 'KINOtekst01', title: 'Frost 2 | Offisiell trailer | Norsk tekst', channel: 'Disney Norge', dubbed: false, texted: true },
+    ];
+  };
+  const deps = { fetchImpl, search, channelTrailers, channelsReady: () => true };
+  const out = await findTrailers('movie', 'tt2953050', normalizeConfig({ tmdb: 'k', maxNo: 4 }), deps);
+  assert.equal(searched, 0, 'no YouTube search when a Norwegian trailer is already known');
   assert.deepEqual(
     out.map((t) => [t.videoId, t.mode, t.label]),
     [
+      ['KINOtale001', 'no', '🇳🇴 Norsk tale'],
       ['NOnorsk0001', 'no', '🇳🇴 Norsk tale'],
-      ['NOsearch001', 'no', '🇳🇴 Norsk tale'],
+      ['KINOtekst01', 'no', '🇳🇴 Norsk tekst'],
       ['ENtrailer01', 'sub', '🇬🇧 Engelsk · norsk tekst'],
       ['ENtrailer02', 'sub', '🇬🇧 Engelsk · norsk tekst'],
     ]
   );
+  assert.equal(out[0].name, 'Frost 2 | Offisiell trailer | Norsk tale (Disney Norge)');
+  assert.equal(out.partial, undefined);
 
-  const subFirst = await findTrailers('movie', 'tt2953050', normalizeConfig({ tmdb: 'k', first: 'sub', no: false, maxSub: 1 }), { fetchImpl, search });
+  // With the channels turned off, TMDB's Norwegian trailer is still listed.
+  const noKino = await findTrailers('movie', 'tt2953050', normalizeConfig({ tmdb: 'k', kino: false }), deps);
+  assert.deepEqual(noKino.map((t) => t.videoId), ['NOnorsk0001', 'ENtrailer01', 'ENtrailer02']);
+
+  const subFirst = await findTrailers('movie', 'tt2953050', normalizeConfig({ tmdb: 'k', first: 'sub', no: false, maxSub: 1 }), deps);
   assert.deepEqual(subFirst.map((t) => t.videoId), ['ENtrailer01']);
 });
 
@@ -147,12 +164,23 @@ test('a skipped dub search marks the answer as partial', async () => {
   const skipped = async () => {
     throw new SearchSkipped('too many YouTube searches waiting');
   };
-  const out = await findTrailers('movie', 'tt0000042', normalizeConfig({ tmdb: 'k5' }), { fetchImpl, search: skipped });
+  const ready = { fetchImpl, channelsReady: () => true };
+  const out = await findTrailers('movie', 'tt0000042', normalizeConfig({ tmdb: 'k5' }), { ...ready, search: skipped });
   assert.deepEqual(out.map((t) => t.videoId), ['ENtoy000001']);
   assert.equal(out.partial, true);
 
-  const done = await findTrailers('movie', 'tt0000042', normalizeConfig({ tmdb: 'k5' }), { fetchImpl, search: async () => [] });
+  let searched = 0;
+  const search = async () => {
+    searched++;
+    return [];
+  };
+  const done = await findTrailers('movie', 'tt0000042', normalizeConfig({ tmdb: 'k5' }), { ...ready, search });
   assert.equal(done.partial, undefined);
+  assert.equal(searched, 1);
+
+  // While the Norwegian channels' lists are still being fetched, the answer is worth asking for again.
+  const early = await findTrailers('movie', 'tt0000042', normalizeConfig({ tmdb: 'k5' }), { fetchImpl, search, channelsReady: () => false });
+  assert.equal(early.partial, true);
 });
 
 test('YouTube search results are filtered to real Norwegian trailers of the title', () => {

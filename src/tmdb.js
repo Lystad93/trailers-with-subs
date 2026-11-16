@@ -145,6 +145,7 @@ export async function getTitleData(tmdbType, tmdbId, key, fetchImpl) {
       originalTitle: details.original_title || details.original_name || '',
       norwegianTitle: noTitle,
       year: date.slice(0, 4),
+      date,
       originalLanguage: orig || null,
       genres: (details.genres || []).map((g) => g.id),
       videos,

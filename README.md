@@ -3,8 +3,11 @@
 A self-hosted trailer addon for [AIOMetadata](https://github.com/cedya77/aiometadata)'s
 **Trailers → "A trailer addon"** setting. For every movie and series it offers:
 
-- **Norwegian trailers.** Dubbed trailers ("norsk tale") and trailers from the Norwegian distributor,
-  taken from TMDB. When TMDB has none, the addon can also search YouTube for a Norwegian dub.
+- **Norwegian cinema trailers.** The trailers Norwegian distributors and cinemas publish on YouTube
+  (SF Studios, Nordisk Film, UIP, Disney, Warner, Norsk Filmdistribusjon, Filmweb and others). They
+  already have Norwegian text in the picture, or Norwegian voices ("norsk tale"), so they are
+  copied as they are and start fastest. Trailers TMDB lists as Norwegian are added, and when there
+  is nothing Norwegian at all the addon can search YouTube for a dub.
 - **English trailers with Norwegian subtitles.** Non-English films also get their original-language trailer subtitled.
   The subtitles are picked best first:
   1. Norwegian subtitles a person made (`nb` / `no` / `nn`)
@@ -40,6 +43,18 @@ translated. A copy is normally complete a few seconds later and is served as a f
 file; a slow one is streamed while it is written. Subtitles get `SUB_WAIT_MS` (10 seconds) to
 arrive. If they are later than that, the trailer starts without them, they are finished in the
 background, and the next play has them. Finished trailers are served from the disk cache.
+
+## Where the Norwegian trailers come from
+
+The addon keeps a list of the videos on the Norwegian distributors' YouTube channels in
+`channels.json` in the cache folder. It fetches each channel's whole list the first time and once
+a week, and only the newest videos every 12 hours in between. A film is matched against that
+list by its Norwegian, English and original title, without asking YouTube anything: the video
+title has to be the film's name plus trailer wording ("Frost 2 | Offisiell trailer | På kino 25.
+desember"), and the video has to be from around the film's release, which keeps remakes apart.
+Ten-second spots, featurettes and clips are left out. `/health` shows how many videos are listed.
+
+Add channels of your own with `CHANNELS_EXTRA` (channel ids or @handles, comma separated).
 
 ## Which apps this works in
 
@@ -94,11 +109,12 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 
 | Setting | Default | |
 |---|---|---|
-| Norwegian trailers | on | Dubbed / Norwegian release trailers |
+| Norwegian trailers | on | Norwegian cinema trailers and dubbed trailers |
+| Use Norwegian distributors' and cinemas' YouTube channels | on | Off = only the Norwegian trailers TMDB lists |
 | English trailers with Norwegian subtitles | on | |
 | Max per group | 2 / 2 | |
 | Show first | Norwegian | Which group comes first. The first trailer is what the *Trailer* button plays |
-| Find Norwegian dubs on YouTube | animation & family | `off`, `family` or `all`. Searches are rate-limited and cached for 7 days |
+| Find Norwegian dubs on YouTube | animation & family | `off`, `family` or `all`. Only used when no Norwegian trailer is known. Searches are rate-limited and cached for 7 days |
 | How subtitles are shown | subtitle track | `soft` (a subtitle track, no re-encoding) or `burn` (burned into the picture, slow) |
 | Allow YouTube's translated / auto subtitles | on | Off = only Norwegian subtitles made by a person |
 | Max resolution | 1080 | 480 to 2160 |
@@ -115,6 +131,9 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 | `CACHE_DIR` | `/data/cache` | Finished trailers |
 | `CACHE_MAX_GB` | `10` | Least recently watched files are removed first |
 | `MAX_JOBS` | `2` | Trailers prepared at the same time |
+| `CHANNELS_EXTRA` | – | More YouTube channels with Norwegian trailers: channel ids (`UC…`) or `@handles`, comma separated |
+| `CHANNEL_REFRESH_HOURS` | `12` | How often the channels' newest videos are fetched |
+| `CHANNEL_DEPTH` / `CHANNEL_RECENT` | `1500` / `60` | Videos per channel on a full fetch and on a refresh |
 | `SUB_WAIT_MS` | `10000` | How long a trailer waits for its subtitles before starting without them (twice as long for burn-in) |
 | `FINISH_WAIT_MS` | `3000` | How long the first viewer waits for a copy that is about to finish, to get a seekable file |
 | `BURN_MAX_HEIGHT` | `1080` | Highest resolution for burned-in subtitles (re-encoding 4K is slow) |
