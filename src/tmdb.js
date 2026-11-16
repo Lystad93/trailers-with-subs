@@ -135,6 +135,10 @@ export async function getTitleData(tmdbType, tmdbId, key, fetchImpl) {
       videos = videos.concat(extra?.results || []);
     }
     const translations = details.translations?.translations || [];
+    const titleIn = (lang) => {
+      const t = translations.find((x) => x.iso_639_1 === lang);
+      return t?.data?.title || t?.data?.name || '';
+    };
     const norwegian = translations.find((t) => ['no', 'nb'].includes(t.iso_639_1));
     const noTitle = norwegian?.data?.title || norwegian?.data?.name || '';
     const date = details.release_date || details.first_air_date || '';
@@ -144,6 +148,8 @@ export async function getTitleData(tmdbType, tmdbId, key, fetchImpl) {
       title: details.title || details.name || '',
       originalTitle: details.original_title || details.original_name || '',
       norwegianTitle: noTitle,
+      danishTitle: titleIn('da'),
+      swedishTitle: titleIn('sv'),
       year: date.slice(0, 4),
       date,
       originalLanguage: orig || null,

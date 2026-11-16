@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { findTrailers, isDubCandidate, rankVideos } from '../src/trailers.js';
 import { normalizeConfig, encodeConfig, decodeConfig, makeProfile, parseProfile } from '../src/config.js';
 
+process.env.SHORTS_CHECK = '0';
+
 const vid = (key, lang, type, name, extra = {}) => ({ key, iso_639_1: lang, site: 'YouTube', type, name, official: true, published_at: '2024-01-01T00:00:00Z', ...extra });
 
 function fakeTmdb(routes) {
@@ -105,6 +107,51 @@ test('finds Norwegian dub and English trailers for a movie', async () => {
 
   const subFirst = await findTrailers('movie', 'tt2953050', normalizeConfig({ tmdb: 'k', first: 'sub', no: false, maxSub: 1 }), deps);
   assert.deepEqual(subFirst.map((t) => t.videoId), ['ENtrailer01']);
+});
+
+test('Danish, else Swedish, when there is no Norwegian trailer; Shorts only when nothing else, and last', async () => {
+  const { fetchImpl } = fakeTmdb({
+    '/3/find/tt7777777': { movie_results: [{ id: 7777 }] },
+    '/3/movie/7777': {
+      title: 'Practical Magic 2',
+      original_language: 'en',
+      genres: [{ id: 35 }],
+      release_date: '2026-06-19',
+      translations: { translations: [{ iso_639_1: 'da', data: { title: 'Heksene 2' } }, { iso_639_1: 'sv', data: { title: '' } }] },
+      videos: { results: [vid('ENshort0001', 'en', 'Trailer', 'Vertical Trailer'), vid('ENshort0002', 'en', 'Trailer', 'Official Trailer', { published_at: '2026-02-01' }), vid('ENnormal001', 'en', 'Teaser', 'Teaser'), vid('NOshort0001', 'no', 'Trailer', 'Offisiell trailer')] },
+    },
+  });
+  const nordic = [
+    { id: 'DKtrailer01', title: 'Heksene 2 - Officiel trailer', channel: 'SF Studios Danmark', lang: 'da', texted: false },
+    { id: 'SEtrailer01', title: 'Practical Magic 2 | Officiell trailer', channel: 'SF Studios', lang: 'sv', texted: false },
+  ];
+  const asked = [];
+  const titles = [];
+  const shorts = async (ids) => {
+    asked.push(...ids);
+    return new Map(ids.map((id) => [id, id === 'ENshort0001' ? null : id.includes('short')]));
+  };
+  const deps = { fetchImpl, channelsReady: () => true, shorts, channelTrailers: (data, opts) => (titles.push(data.danishTitle), opts.nordic ? nordic : []) };
+  const out = await findTrailers('movie', 'tt7777777', normalizeConfig({ tmdb: 'k' }), deps);
+  assert.deepEqual(
+    out.map((t) => [t.videoId, t.lang || t.mode, t.label]),
+    [
+      ['DKtrailer01', 'da', '🇩🇰 Dansk kinotrailer'],
+      ['ENnormal001', 'sub', '🇬🇧 Engelsk · norsk tekst'],
+      ['NOshort0001', 'no', '🇳🇴 Norsk trailer · Short'],
+    ]
+  );
+  assert.equal(out.partial, true, 'one video is not known yet: ask again soon');
+  assert.ok(!asked.includes('DKtrailer01'), 'channel uploads are never Shorts');
+  assert.deepEqual(titles, ['Heksene 2'], 'the Danish title is used to find Danish uploads');
+
+  // Without the neighbours, and with only Shorts in English, one Short is better than nothing.
+  const { fetchImpl: onlyShorts } = fakeTmdb({
+    '/3/find/tt7777778': { movie_results: [{ id: 7778 }] },
+    '/3/movie/7778': { title: 'IT', original_language: 'en', genres: [], videos: { results: [vid('ENshort0003', 'en', 'Trailer', 'Trailer'), vid('ENshort0004', 'en', 'Teaser', 'Teaser')] } },
+  });
+  const few = await findTrailers('movie', 'tt7777778', normalizeConfig({ tmdb: 'k', nordic: false }), { ...deps, fetchImpl: onlyShorts });
+  assert.deepEqual(few.map((t) => [t.videoId, t.short]), [['ENshort0003', true]]);
 });
 
 test('live-action films do not search YouTube by default; a slow search does not block', async () => {

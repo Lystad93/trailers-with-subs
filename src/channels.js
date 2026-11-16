@@ -23,6 +23,24 @@ export const DEFAULT_CHANNELS = [
   { id: 'UCjQX_J3Jo53HAJGJu4CJy3w', name: 'Fidalgo Films' },
   // Filmweb also re-posts trailers without Norwegian text: only its marked ones count.
   { id: 'UC8C3teVwucjcg7skFUHtPEw', name: 'Filmweb', marked: true },
+
+  // Danish and Swedish distributors: the next best thing when there is no Norwegian trailer.
+  { id: 'UC2LzjztyruaONwnZPIGdBAA', name: 'Nordisk Film', lang: 'da' },
+  { id: 'UCIleQtx3SRfL_PiiOJxm91g', name: 'Nordisk Film Biografer', lang: 'da' },
+  { id: 'UCkAzdVMiwWo5gEI9JrFs04w', name: 'Sony Pictures - Danmark', lang: 'da' },
+  { id: 'UCmA9LbNZH5z83D7x8EcAkSQ', name: 'United International Pictures Danmark', lang: 'da' },
+  { id: 'UClAtPbYb5D1qvM0D2PabqjQ', name: 'SF Studios Danmark', lang: 'da' },
+  { id: 'UCVV8jeodhHpeuTjnU6RU1yA', name: 'Scanbox Entertainment Danmark', lang: 'da' },
+  { id: 'UCN6OyiMHPGRsYWTZpCgn5kQ', name: 'Disney Danmark', lang: 'da' },
+  { id: 'UCjpxtkXp9sVsltyanvG_z6Q', name: 'Filmsiden Trailers', lang: 'da', marked: true },
+  { id: 'UCkllgTNY4dg8qdMfpPlnmyQ', name: 'Nordisk Film Sverige', lang: 'sv' },
+  { id: 'UC_4Nc4NeEG-SIaetcgMTtfw', name: 'SF Studios', lang: 'sv' },
+  { id: 'UCDjvMCwueVulV2xCUCJvd_g', name: 'Scanbox Entertainment Sverige', lang: 'sv' },
+  { id: 'UCQ8eoZdZP4gvGiVkqAh05VA', name: 'Disney Sverige', lang: 'sv' },
+  { id: 'UCT8HvLtkRReWyTXQJB7mG9Q', name: 'Noble Entertainment', lang: 'sv' },
+  { id: 'UCMwpMKpJZw5g2N_rb_jwEmA', name: 'Njutafilms', lang: 'sv' },
+  { id: 'UCIEdXQPXHRMK07SDUfaYjHA', name: 'Folkets Bio', lang: 'sv' },
+  { id: 'UCY27XKkuu-TvQWOVHsWr9yA', name: 'Bio.se', lang: 'sv', marked: true },
 ];
 
 // CHANNELS_EXTRA: more channels, as channel ids (UC…) or @handles, separated by commas.
@@ -49,18 +67,25 @@ export function normalizeTitle(s) {
     .trim();
 }
 
-const MONTHS = 'januar|februar|mars|april|mai|juni|juli|august|september|oktober|november|desember';
+// Norwegian, Danish and Swedish month names.
+const MONTHS = 'januar|januari|februar|februari|mars|marts|april|mai|maj|juni|juli|august|augusti|september|oktober|november|desember|december';
 // Whole words only; \b does not know that å, ø and æ are letters.
 const words = (pattern) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${pattern})(?![\\p{L}\\p{N}])`, 'gu');
 const NOISE = [
-  words(`\\d{1,2} (${MONTHS})( (19|20)\\d{2})?`), // 27. november (2026)
-  words('(med|m) (norsk|norske) (tekst|tale|stemmer)'),
-  words('(norsk|norske|norwegian) (tekst|tekstet|tale|stemmer|versjon|subtitles|voices|trailer)'),
+  words(`(d )?\\d{1,2} (${MONTHS})( (19|20)\\d{2})?`), // 27. november (2026), d. 20. juni
+  words('(med|m) (norsk|norske|dansk|danske|svensk|svenska) (tekst|tale|stemmer|undertekster|tekster|text)'),
+  words('(norsk|norske|norwegian|dansk|danske|danish|svensk|svenska|swedish) (tekst|tekstet|tale|stemmer|versjon|subtitles|voices|trailer|undertekster|text)'),
   words('på kino( (nå|snart))?'),
   words('i kinoene( nå)?'),
-  words('(kino)?premiere'),
-  words('((offisiell|offisielle|ofisiell|official|ny|siste|final) )*(trailer|teaser|teasertrailer|hovedtrailer)( \\d)?'), // "ny offisiell trailer 2"
-  words('hd|4k|uhd'),
+  words('(kommer )?i (biografen|biograferne)( (nu|snart|d))?'),
+  words('kommer( snart)?'),
+  words('\\d{1,2} \\d{1,2} \\d{2,4}'), // 16.07.20
+  words('(swe|se|sv|dk|da|no|nor) subs?'),
+  words('(svenskt|engelskt|svensk|engelsk|dansk|norsk) (tal|tale)'),
+  words('på bio( (nu|snart))?'),
+  words('(kino|biograf)?premiere|biopremiär'),
+  words('((offisiell|offisielle|ofisiell|official|officiel|officiell|ny|siste|sidste|sista|final) )*(trailer|teaser|teasertrailer|hovedtrailer)( \\d)?'), // "ny offisiell trailer 2"
+  words('hd|4k|uhd|dk'),
 ];
 
 // What is left of a video title once the trailer wording is gone: the film's name.
@@ -71,8 +96,8 @@ export function filmNameOf(videoTitle) {
 }
 
 const TRAILER = /\b(trailer|teaser|teasertrailer|hovedtrailer)\b/i;
-const DUBBED = /norsk\s*tale|norske\s*stemmer|dubb/i;
-const TEXTED = /norsk\s*tekst|(?<!u)tekstet/i;
+const DUBBED = /norsk\s*tale|norske\s*stemmer|dubb|dansk\s*tale|svenskt?\s*tal\b|svenska\s*röster/i;
+const TEXTED = /norsk\s*tekst|(?<!u)tekstet|undertekster|svensk\s*text|\b(swe|se|dk|da)\s*subs?\b/i;
 const UNTEXTED = /utekstet|uten\s+tekst/i;
 const NOT_A_TRAILER = /\b(featurette|bak kulissene|behind the scenes|intervju|interview|klipp|clip|musikkvideo|lyric|premierefest|reaction)\b/i;
 
@@ -178,7 +203,7 @@ export function refreshChannels({ gapMs = 5000, list = listChannel } = {}) {
       await sleep(gapMs);
     }
     const status = indexStatus();
-    log.info(`Norwegian channels: ${status.videos} videos from ${status.channels} channels (${added} new${failed ? `, ${failed} channels failed` : ''})`);
+    log.info(`Nordic cinema channels: ${status.videos} videos from ${status.channels} channels (${added} new${failed ? `, ${failed} channels failed` : ''})`);
     return status;
   })().finally(() => {
     refreshing = null;
@@ -190,7 +215,7 @@ export function refreshChannels({ gapMs = 5000, list = listChannel } = {}) {
 export async function startChannelIndex() {
   await loadIndex();
   const status = indexStatus();
-  if (status.videos) log.info(`Norwegian channels: ${status.videos} videos from ${status.channels} channels on file`);
+  if (status.videos) log.info(`Nordic cinema channels: ${status.videos} videos from ${status.channels} channels on file`);
   const run = () => refreshChannels().catch((err) => log.warn(`channel refresh: ${err.message}`));
   const age = status.refreshed ? Date.now() - Date.parse(status.refreshed) : Infinity;
   const every = env.channelRefreshHours * 60 * 60 * 1000;
@@ -205,32 +230,40 @@ export const indexReady = () => indexStatus().videos > 0;
  * Trailers for a film from the Norwegian channels, best first.
  * data: { title, originalTitle, norwegianTitle, date, tmdbType, genres }
  */
-export function findChannelTrailers(data, { preferDubbed = false } = {}) {
-  const names = [...new Set([data.norwegianTitle, data.title, data.originalTitle].filter(Boolean))];
+const LANG_ORDER = { no: 0, da: 1, sv: 2 };
+
+export function findChannelTrailers(data, { preferDubbed = false, nordic = true } = {}) {
+  const names = [...new Set([data.norwegianTitle, data.danishTitle, data.swedishTitle, data.title, data.originalTitle].filter(Boolean))];
   const released = data.date ? Date.parse(data.date) : NaN;
   const found = [];
-  const onlyMarked = new Set(configuredChannels().filter((c) => c.marked).map((c) => c.name));
-  for (const channel of Object.values(index.channels)) {
+  const configured = new Map(configuredChannels().flatMap((c) => [[c.id, c], [c.name, c]]));
+  for (const [id, channel] of Object.entries(index.channels)) {
+    const setup = configured.get(id) || configured.get(channel.name) || {};
+    const lang = setup.lang || 'no';
+    if (lang !== 'no' && !nordic) continue;
     for (const v of channel.videos) {
       if (v.duration && (v.duration < 25 || v.duration > 330)) continue; // ten-second spots, full films
       if (!matchesFilm(v.title, names) || UNTEXTED.test(v.title)) continue;
-      if (onlyMarked.has(channel.name) && !DUBBED.test(v.title) && !TEXTED.test(v.title)) continue;
-      if (data.tmdbType !== 'movie' && /på kino|i kinoene|kinopremiere/i.test(v.title)) continue; // a cinema film, not the series
-      // Keep remakes and same-named films apart: a trailer comes out around its film.
+      const dubbed = DUBBED.test(v.title);
+      if (dubbed && lang !== 'no') continue; // Danish or Swedish voices are no help
+      if (setup.marked && !dubbed && !TEXTED.test(v.title)) continue;
+      if (data.tmdbType !== 'movie' && /på kino|i kinoene|kinopremiere|i biografen|på bio|biopremiär/i.test(v.title)) continue; // a cinema film, not the series
       if (v.ts && !Number.isNaN(released)) {
         const at = v.ts * 1000;
         // A film's trailer comes out within a year and a half of it, either side (festival films
-        // reach Norway late). For a series only its launch counts: a later cinema film often
+        // reach the Nordics late). For a series only its launch counts: a later cinema film often
         // shares the name.
         const [before, after] = data.tmdbType === 'movie' ? [550, 550] : [365, 365];
         if (at < released - before * DAY || at > released + after * DAY) continue;
       }
       if (found.some((f) => f.id === v.id)) continue;
-      found.push({ ...v, channel: channel.name, dubbed: DUBBED.test(v.title), texted: TEXTED.test(v.title), teaser: /teaser/i.test(v.title) });
+      found.push({ ...v, channel: channel.name, lang, dubbed, texted: TEXTED.test(v.title), teaser: /teaser/i.test(v.title) });
     }
   }
+  // Norwegian first, then Danish, then Swedish; within a language trailers before teasers.
   return found.sort(
     (a, b) =>
+      LANG_ORDER[a.lang] - LANG_ORDER[b.lang] ||
       Number(a.teaser) - Number(b.teaser) ||
       (preferDubbed ? Number(b.dubbed) - Number(a.dubbed) : Number(a.dubbed) - Number(b.dubbed)) ||
       (b.ts || 0) - (a.ts || 0)

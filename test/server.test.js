@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+process.env.SHORTS_CHECK = '0';
+
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'trailers-server-'));
 process.env.CACHE_DIR = tmp;
 process.env.LOG_LEVEL = 'error';

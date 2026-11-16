@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 process.env.GEMINI_API_KEY = 'test-key';
 process.env.LOG_LEVEL = 'error';
 process.env.GEMINI_MODEL = 'gemini-test';
-const { translateTexts, translateCues, mergeForTranslation, wrapText, translatorName, TranslateError } = await import('../src/translate.js');
+process.env.GEMINI_RETRY_MS = '10';
+const { translateTexts, translateCues, mergeForTranslation, wrapText, translatorName, TranslateError, resetGeminiForTests } = await import('../src/translate.js');
 const { subtitlePlan } = await import('../src/youtube.js');
 
 // A stand-in for Gemini's generateContent endpoint.
@@ -63,6 +64,7 @@ test('a reply with the wrong number of lines is asked again, then given up on', 
 });
 
 test('rate limits are temporary, a bad key is not', async () => {
+  resetGeminiForTests();
   const busy = fakeGemini(() => ({ ok: false, status: 429, json: async () => ({ error: { message: 'Resource has been exhausted' } }) }));
   await assert.rejects(translateTexts(['a'], busy.fetchImpl), (e) => e instanceof TranslateError && e.transient && /exhausted/.test(e.message));
   const bad = fakeGemini(() => ({ ok: false, status: 400, json: async () => ({ error: { message: 'API key not valid' } }) }));
@@ -70,6 +72,7 @@ test('rate limits are temporary, a bad key is not', async () => {
 });
 
 test('when the main model does not answer in time, the lighter model is used, and kept for a while', async () => {
+  resetGeminiForTests();
   const models = [];
   const fetchImpl = async (url, opts) => {
     const model = /models\/([^:]+):/.exec(String(url))[1];
@@ -86,6 +89,33 @@ test('when the main model does not answer in time, the lighter model is used, an
   assert.deepEqual(await translateTexts(['b'], fetchImpl), ['NO:b']);
   assert.deepEqual([...new Set(models)], ['gemini-test', 'gemini-flash-lite-latest']);
   assert.equal(models.filter((m) => m === 'gemini-test').length, 1, 'the slow model is not asked again');
+});
+
+test('overloaded models are passed over, and asked again a little later when all are', async () => {
+  resetGeminiForTests();
+  const asked = [];
+  let busy = new Set(['gemini-test', 'gemini-flash-lite-latest']);
+  const fetchImpl = async (url, opts) => {
+    const model = /models\/([^:]+):/.exec(String(url))[1];
+    asked.push(model);
+    if (busy === 'all' ? asked.length <= 4 : busy.has(model)) return { ok: false, status: 503, json: async () => ({ error: { message: 'The model is overloaded' } }) };
+    const lines = JSON.parse(JSON.parse(opts.body).contents[0].parts[0].text.split('\n').slice(-1)[0]);
+    return reply(lines.map((l) => `NO:${l}`));
+  };
+  assert.deepEqual(await translateTexts(['a'], fetchImpl), ['NO:a']);
+  assert.deepEqual(asked, ['gemini-test', 'gemini-flash-lite-latest', 'gemini-2.5-flash']);
+  // The overloaded ones rest for a few minutes.
+  asked.length = 0;
+  assert.deepEqual(await translateTexts(['b'], fetchImpl), ['NO:b']);
+  assert.deepEqual(asked, ['gemini-2.5-flash']);
+
+  // Every model overloaded: a second round, a moment later, gets through.
+  resetGeminiForTests();
+  asked.length = 0;
+  busy = 'all';
+  assert.deepEqual(await translateTexts(['c'], fetchImpl), ['NO:c']);
+  assert.equal(asked.length, 5);
+  resetGeminiForTests();
 });
 
 test('auto-caption fragments are merged into sentences before translating', () => {

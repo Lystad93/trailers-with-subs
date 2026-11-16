@@ -4,6 +4,7 @@ export const DEFAULTS = Object.freeze({
   tmdb: '', // TMDB API key (v3) or read access token (v4); falls back to the server's TMDB_API_KEY
   no: true, // list Norwegian trailers (dubbed, or Norwegian release)
   kino: true, // use the YouTube channels of Norwegian distributors and cinemas (Norwegian text or voices in the picture)
+  nordic: true, // Danish, else Swedish, cinema trailers when there is no Norwegian one
   sub: true, // list English/original-language trailers with Norwegian subtitles
   maxNo: 2, // at most this many Norwegian trailers
   maxSub: 2, // at most this many subtitled trailers
@@ -45,6 +46,7 @@ export function normalizeConfig(raw) {
     tmdb: typeof c.tmdb === 'string' ? c.tmdb.trim().slice(0, 400) : '',
     no: bool(c.no, DEFAULTS.no),
     kino: bool(c.kino, DEFAULTS.kino),
+    nordic: bool(c.nordic, DEFAULTS.nordic),
     sub: bool(c.sub, DEFAULTS.sub),
     maxNo: int(c.maxNo, DEFAULTS.maxNo, 0, 10),
     maxSub: int(c.maxSub, DEFAULTS.maxSub, 0, 10),

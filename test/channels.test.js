@@ -89,6 +89,24 @@ test('channel trailers are found, dated and ranked', () => {
   assert.equal(findChannelTrailers({ title: 'Monster', originalTitle: 'Monster', norwegianTitle: '', date: '2022-09-21', tmdbType: 'tv' }).length, 0);
 });
 
+test('Danish and Swedish cinema trailers come after the Norwegian ones', () => {
+  setIndexForTests({
+    channels: {
+      a: { name: 'SF Studios Danmark', videos: [video('ddddddddd01', 'Heksene fra Eastwick 2 - Officiel trailer - I biografen d. 20. juni', '2026-03-01'), video('ddddddddd02', 'Vaiana 2 | Officiel trailer | Dansk tale', '2026-03-01')] },
+      b: { name: 'Nordisk Film Sverige', videos: [video('sssssssss01', 'Practical Magic 2 | Officiell trailer | Biopremiär 19 juni', '2026-03-02')] },
+      c: { name: 'Filmsiden Trailers', videos: [video('ddddddddd03', 'Practical Magic 2 - Trailer (HD - m. danske undertekster)', '2026-03-03'), video('ddddddddd04', 'Practical Magic 2 - Trailer', '2026-03-03')] },
+      d: { name: 'UIP Norway', videos: [video('nnnnnnnnn01', 'Practical Magic 2 | Teaser', '2026-01-10')] },
+    },
+  });
+  const film = { title: 'Practical Magic 2', originalTitle: 'Practical Magic 2', norwegianTitle: '', danishTitle: 'Heksene fra Eastwick 2', swedishTitle: '', date: '2026-06-19', tmdbType: 'movie' };
+  const found = findChannelTrailers(film);
+  assert.deepEqual(found.map((v) => [v.id, v.lang]), [['nnnnnnnnn01', 'no'], ['ddddddddd03', 'da'], ['ddddddddd01', 'da'], ['sssssssss01', 'sv']]);
+  assert.equal(found[1].texted, true);
+  assert.deepEqual(findChannelTrailers(film, { nordic: false }).map((v) => v.id), ['nnnnnnnnn01']);
+  // Danish voices are no use.
+  assert.equal(findChannelTrailers({ title: 'Moana 2', originalTitle: 'Moana 2', norwegianTitle: 'Vaiana 2', date: '2026-06-01', tmdbType: 'movie' }).length, 0);
+});
+
 test('channel lists are fetched, merged with what is on file, and saved', async () => {
   setIndexForTests({ channels: {} });
   assert.deepEqual(configuredChannels().slice(DEFAULT_CHANNELS.length).map((c) => c.id), ['@MinKino', 'UCaaaaaaaaaaaaaaaaaaaaaa']);

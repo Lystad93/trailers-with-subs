@@ -149,9 +149,20 @@ async function geminiWith(model, texts, body, fetchImpl, timeoutMs) {
   return null;
 }
 
-// When the main model does not answer in time, the lighter fallback model is asked instead, and
-// used first for the next hours.
-let preferFallbackUntil = 0;
+// The models are asked in order. One that is overloaded, too slow or unknown is skipped for a
+// while, so the next trailer goes straight to a model that answers.
+const resting = new Map(); // model → until
+
+function geminiModels() {
+  const all = [env.geminiModel, ...env.geminiFallbackModel.split(',')].map((m) => m.trim()).filter(Boolean);
+  const models = [...new Set(all)];
+  const now = Date.now();
+  const awake = models.filter((m) => !(resting.get(m) > now));
+  // Everything resting: try them anyway, the one due back first.
+  return awake.length ? awake : models.sort((x, y) => resting.get(x) - resting.get(y));
+}
+
+const moveOn = (err) => err.timedOut || err.status === 404 || err.status === 429 || err.status >= 500;
 
 async function gemini(texts, fetchImpl, context) {
   const prompt = (context ? `Trailer: ${context}\n` : '') + `Lines (${texts.length}):\n${JSON.stringify(texts)}`;
@@ -164,17 +175,31 @@ async function gemini(texts, fetchImpl, context) {
       responseSchema: { type: 'ARRAY', items: { type: 'STRING' } },
     },
   };
-  const fallback = env.geminiFallbackModel && env.geminiFallbackModel !== env.geminiModel ? env.geminiFallbackModel : null;
-  if (fallback && Date.now() < preferFallbackUntil) return geminiWith(fallback, texts, body, fetchImpl, env.geminiTimeoutMs * 2);
-  try {
-    return await geminiWith(env.geminiModel, texts, body, fetchImpl, env.geminiTimeoutMs);
-  } catch (err) {
-    if (!fallback || !(err.timedOut || err.status === 429 || err.status >= 500)) throw err;
-    log.warn(`Gemini (${env.geminiModel}): ${err.message}; using ${fallback} instead, also for the next 6 hours`);
-    const out = await geminiWith(fallback, texts, body, fetchImpl, env.geminiTimeoutMs * 2);
-    preferFallbackUntil = Date.now() + 6 * 60 * 60 * 1000;
-    return out;
+  let lastError;
+  // Two rounds: "overloaded" is often over a few seconds later.
+  for (let round = 1; round <= 2; round++) {
+    const models = geminiModels();
+    for (const [i, model] of models.entries()) {
+      try {
+        return await geminiWith(model, texts, body, fetchImpl, env.geminiTimeoutMs * (i === 0 ? 1 : 2));
+      } catch (err) {
+        if (!moveOn(err)) throw err;
+        lastError = err;
+        // Slow or unknown models are left alone for hours, overloaded ones for a few minutes.
+        const rest = err.timedOut || err.status === 404 ? 6 * 60 * 60 * 1000 : 3 * 60 * 1000;
+        resting.set(model, Date.now() + rest);
+        const next = models[i + 1] || (round === 1 ? 'one more round' : null);
+        log.warn(`Gemini (${model}): ${err.message}${next ? `; trying ${next}` : ''}`);
+      }
+    }
+    if (round === 1) await new Promise((r) => setTimeout(r, env.geminiRetryMs));
   }
+  throw lastError;
+}
+
+export function resetGeminiForTests() {
+  resting.clear();
+  thinkingFor.clear();
 }
 
 async function libre(texts, fetchImpl) {

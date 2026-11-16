@@ -75,7 +75,8 @@ export const env = {
   geminiKey: (process.env.GEMINI_API_KEY || '').trim(),
   geminiModel: (process.env.GEMINI_MODEL || 'gemini-flash-latest').trim(),
   // Asked instead when the main model is too slow or overloaded. Empty turns the fallback off.
-  geminiFallbackModel: (process.env.GEMINI_FALLBACK_MODEL ?? 'gemini-flash-lite-latest').trim(),
+  geminiFallbackModel: (process.env.GEMINI_FALLBACK_MODEL ?? 'gemini-flash-lite-latest,gemini-2.5-flash,gemini-2.5-flash-lite').trim(),
+  geminiRetryMs: num(process.env.GEMINI_RETRY_MS, 4000),
   geminiTimeoutMs: num(process.env.GEMINI_TIMEOUT_MS, 20000),
   libreUrl: (process.env.LIBRETRANSLATE_URL || '').trim(),
   libreKey: (process.env.LIBRETRANSLATE_API_KEY || '').trim(),

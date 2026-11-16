@@ -48,6 +48,8 @@ export function getInfo(videoId) {
   });
 }
 
+export const forgetInfo = (videoId) => infoMemo.store.delete(videoId);
+
 export const BOT_CHECK = /confirm you(?:'|’)re not a bot|Sign in to confirm/i;
 
 export function botCheckHint(source) {

@@ -2,6 +2,7 @@ import { resolveTmdb, getTitleData } from './tmdb.js';
 import { searchYoutube, SearchSkipped, YT_ID } from './youtube.js';
 import { log, logThrottled } from './env.js';
 import { findChannelTrailers, indexReady, normalizeTitle } from './channels.js';
+import { findShorts } from './shorts.js';
 
 export { normalizeTitle };
 
@@ -71,9 +72,17 @@ async function searchDubs(data, limit) {
 
 /**
  * Finds the trailers to offer for a title.
- * Returns [{ videoId, mode: 'no'|'sub', label, name }], in the configured order.
+ * Returns [{ videoId, mode: 'no'|'sub', lang, label, name, short }], in the configured order, Shorts last.
  */
-export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searchBudgetMs = 3500, search = searchDubs, channelTrailers = findChannelTrailers, channelsReady = indexReady } = {}) {
+// A Danish or Swedish cinema trailer has Danish or Swedish text in the picture: readable for a
+// Norwegian, and used when there is no Norwegian trailer.
+const NORDIC = {
+  da: { flag: '🇩🇰', label: '🇩🇰 Dansk tekst', plain: '🇩🇰 Dansk kinotrailer' },
+  sv: { flag: '🇸🇪', label: '🇸🇪 Svensk tekst', plain: '🇸🇪 Svensk kinotrailer' },
+};
+const SHORT_HINT = /\b(vertical|shorts?)\b|#shorts/i;
+
+export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searchBudgetMs = 3500, search = searchDubs, channelTrailers = findChannelTrailers, channelsReady = indexReady, shorts = findShorts } = {}) {
   const key = config.tmdb || tmdbKey;
   const target = await resolveTmdb(type, id, key, fetchImpl);
   if (!target) return [];
@@ -88,18 +97,24 @@ export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searc
   const family = data.genres.includes(ANIMATION) || data.genres.includes(FAMILY);
   let partial = false;
   let no = [];
+  let neighbours = []; // Danish, else Swedish
   if (config.no && config.kino) {
     // Norwegian distributors' own uploads come first: Norwegian text is already in the picture.
-    for (const v of channelTrailers(data, { preferDubbed: family })) {
+    for (const v of channelTrailers(data, { preferDubbed: family, nordic: config.nordic })) {
+      const name = `${v.title} (${v.channel})`;
+      if (v.lang && v.lang !== 'no') {
+        const n = NORDIC[v.lang];
+        if (!norwegianFilm && (!neighbours.length || neighbours[0].lang === v.lang)) neighbours.push({ videoId: v.id, mode: 'no', lang: v.lang, label: v.texted ? n.label : n.plain, name });
+        continue;
+      }
       const label = v.dubbed ? '🇳🇴 Norsk tale' : norwegianFilm ? '🇳🇴 Norsk trailer' : v.texted ? '🇳🇴 Norsk tekst' : '🇳🇴 Norsk kinotrailer';
-      no.push({ videoId: v.id, mode: 'no', label, name: `${v.title} (${v.channel})` });
+      no.push({ videoId: v.id, mode: 'no', lang: 'no', label, name });
     }
     if (!channelsReady()) partial = true; // the channel lists are still being fetched
   }
   for (const v of noVideos) {
-    if (!no.some((n) => n.videoId === v.key)) no.push({ videoId: v.key, mode: 'no', label: noLabel(v.name, data), name: v.name || 'Trailer' });
+    if (!no.some((n) => n.videoId === v.key)) no.push({ videoId: v.key, mode: 'no', lang: 'no', label: noLabel(v.name, data), name: v.name || 'Trailer' });
   }
-  no = no.slice(0, config.maxNo);
 
   // Look for Norwegian dubs on YouTube when neither the channels nor TMDB have a Norwegian trailer.
   const searchWanted =
@@ -121,24 +136,40 @@ export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searc
     if (results === null) partial = true;
     if (results === null) log.debug(`YouTube search for ${id} is still running; it will be cached for next time`);
     for (const r of results || []) {
-      if (!no.some((n) => n.videoId === r.id)) no.push({ videoId: r.id, mode: 'no', label: noLabel(r.title, data), name: r.title });
+      if (!no.some((n) => n.videoId === r.id)) no.push({ videoId: r.id, mode: 'no', lang: 'no', label: noLabel(r.title, data), name: r.title });
     }
   }
 
-  let sub = [];
+  let pool = [];
   if (config.sub && !norwegianFilm) {
     const langs = ['en', data.originalLanguage].filter((l, i, a) => l && !NO_LANGS.has(l) && a.indexOf(l) === i);
-    let pool = ranked.filter((v) => langs.includes(v.iso_639_1));
+    pool = ranked.filter((v) => langs.includes(v.iso_639_1));
     if (!pool.length) pool = ranked.filter((v) => !v.iso_639_1);
     // English trailers first, then the ones in the film's own language; best ranked first within each.
     pool.sort((a, b) => langs.indexOf(a.iso_639_1) - langs.indexOf(b.iso_639_1) || ranked.indexOf(a) - ranked.indexOf(b));
-    sub = pool
+    pool = pool
       .filter((v) => !no.some((n) => n.videoId === v.key))
-      .slice(0, config.maxSub)
       .map((v) => ({ videoId: v.key, mode: 'sub', label: subLabel(v.iso_639_1 ?? 'null'), name: v.name || 'Trailer' }));
   }
 
-  const out = config.first === 'sub' ? [...sub, ...no] : [...no, ...sub];
+  // Shorts (upright phone videos) are a narrow strip on a TV. They are only used when a group
+  // has nothing else, and then they go last. Only the videos that could be listed are checked.
+  const candidates = [...no.slice(0, config.maxNo + 2), ...pool.slice(0, config.maxSub + 3)];
+  const answers = candidates.length ? await shorts(candidates.map((c) => c.videoId)) : new Map();
+  const isShort = (t) => answers.get(t.videoId) === true || (answers.get(t.videoId) !== false && SHORT_HINT.test(t.name));
+  if (candidates.some((c) => answers.get(c.videoId) === null)) partial = true; // asked, no answer yet
+  const split = (list, max) => {
+    const checked = list.filter((t) => answers.has(t.videoId));
+    const normal = checked.filter((t) => !isShort(t)).slice(0, max);
+    return [normal, normal.length ? [] : checked.filter(isShort).slice(0, 1).map((t) => ({ ...t, short: true, label: `${t.label} · Short` }))];
+  };
+  const [noNormal, noShorts] = split(no, config.maxNo);
+  // Danish or Swedish only when there is no ordinary Norwegian trailer.
+  const nordic = noNormal.length ? noNormal : neighbours.slice(0, config.maxNo);
+  const [sub, subShorts] = split(pool, config.maxSub);
+  const last = [...noShorts, ...subShorts];
+
+  const out = [...(config.first === 'sub' ? [...sub, ...nordic] : [...nordic, ...sub]), ...last];
   // The dub search was skipped or is still running: worth asking again soon.
   if (partial) out.partial = true;
   out.film = `${data.title}${data.year ? ` (${data.year})` : ''}`;

@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+process.env.SHORTS_CHECK = '0';
+
 const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'trailers-test-'));
 process.env.CACHE_DIR = path.join(tmp, 'cache');
@@ -202,6 +204,21 @@ test('a job that loses its audio fails instead of caching a silent trailer', { s
   const job = media.startJob('yyyyyyyyyyy', profileStr, parseProfile(profileStr), badDeps);
   await assert.rejects(job.done, /missing a track \(has: video\)/);
   assert.equal(fs.existsSync(media.finalPath(media.cacheKey('yyyyyyyyyyy', profileStr))), false);
+});
+
+test('a download YouTube refuses with 403 is tried once more with new links', { skip: !hasFfmpeg }, async () => {
+  let opened = 0;
+  const openSource = (_p, id) => {
+    opened++;
+    // The first video download is refused; everything after it works.
+    if (opened === 1) return spawn('sh', ['-c', 'echo "ERROR: unable to download video data: HTTP Error 403: Forbidden" >&2; exit 1'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    return spawn('cat', [fileOf(id)], { stdio: ['ignore', 'pipe', 'pipe'] });
+  };
+  const profileStr = 'no.1080.h264';
+  const job = media.startJob('rrrrrrrrrrr', profileStr, parseProfile(profileStr), { ...deps, openSource });
+  const file = await job.done;
+  assert.deepEqual(types(file).sort(), ['audio', 'video']);
+  assert.equal(opened, 4);
 });
 
 test('signatures depend on video and profile', () => {

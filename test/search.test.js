@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+process.env.SHORTS_CHECK = '0';
+
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'trailers-search-'));
 const fake = path.join(tmp, 'yt-dlp');
 const mode = path.join(tmp, 'mode');

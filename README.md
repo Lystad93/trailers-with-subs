@@ -8,6 +8,8 @@ A self-hosted trailer addon for [AIOMetadata](https://github.com/cedya77/aiometa
   already have Norwegian text in the picture, or Norwegian voices ("norsk tale"), so they are
   copied as they are and start fastest. Trailers TMDB lists as Norwegian are added, and when there
   is nothing Norwegian at all the addon can search YouTube for a dub.
+- **Danish or Swedish cinema trailers** when there is no Norwegian one: Danish first, then Swedish,
+  from their distributors' channels, with Danish or Swedish text in the picture.
 - **English trailers with Norwegian subtitles.** Non-English films also get their original-language trailer subtitled.
   The subtitles are picked best first:
   1. Norwegian subtitles a person made (`nb` / `no` / `nn`)
@@ -54,7 +56,25 @@ title has to be the film's name plus trailer wording ("Frost 2 | Offisiell trail
 desember"), and the video has to be from around the film's release, which keeps remakes apart.
 Ten-second spots, featurettes and clips are left out. `/health` shows how many videos are listed.
 
+Danish and Swedish distributors' channels (Nordisk Film, SF Studios, UIP, Sony, Scanbox, Disney,
+Noble, Njutafilms, Folkets Bio, Filmsiden, Bio.se) are listed the same way and matched by the
+film's Danish or Swedish title too. They are only offered when there is no Norwegian trailer:
+Danish if there is one, otherwise Swedish. Trailers with Danish or Swedish voices are left out.
+
 Add channels of your own with `CHANNELS_EXTRA` (channel ids or @handles, comma separated).
+
+## The order, and YouTube Shorts
+
+1. Norwegian trailers; if there are none, Danish; if there are none, Swedish
+2. English (or original-language) trailers with Norwegian subtitles
+3. Shorts, only for a group that has nothing else
+
+TMDB lists YouTube Shorts (upright phone videos) among a film's trailers. On a TV they are a narrow
+strip and they seldom have captions, so a Short is only listed when its group has no ordinary
+trailer, and then last, marked "Short". The addon asks YouTube which videos are Shorts
+(`youtube.com/shorts/<id>` redirects for ordinary videos), keeps the answers in `shorts.json`, and
+also remembers any video that turned out upright when it was played. Turn the asking off with
+`SHORTS_CHECK=0`.
 
 ## Which apps this works in
 
@@ -112,6 +132,7 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 | Norwegian trailers | on | Norwegian cinema trailers and dubbed trailers |
 | Play Norwegian trailers straight from YouTube | on | They go out as YouTube ids, so the app fetches them itself and nothing is downloaded; they also work in Nuvio. Off = the server fetches them in the best quality |
 | Use Norwegian distributors' and cinemas' YouTube channels | on | Off = only the Norwegian trailers TMDB lists |
+| Danish or Swedish cinema trailers when there is no Norwegian one | on | Danish first, then Swedish |
 | English trailers with Norwegian subtitles | on | |
 | Max per group | 2 / 2 | |
 | Show first | Norwegian | Which group comes first. The first trailer is what the *Trailer* button plays |
@@ -142,7 +163,8 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 | `SUB_FONT` / `SUB_FONT_SIZE` | `DejaVu Sans` / `18` | Burned-in subtitle style (the size is relative to a 288-line canvas) |
 | `GEMINI_API_KEY` | – | Translate subtitles with Google Gemini (key from aistudio.google.com; the same key AIOMetadata uses works). Strongly recommended on a VPS: YouTube rate limits its own translations for servers |
 | `GEMINI_MODEL` | `gemini-flash-latest` | Gemini model for translation |
-| `GEMINI_FALLBACK_MODEL` / `GEMINI_TIMEOUT_MS` | `gemini-flash-lite-latest` / `20000` | The model asked instead when the main one has not answered in time or is overloaded; it is then used first for 6 hours |
+| `GEMINI_FALLBACK_MODEL` / `GEMINI_TIMEOUT_MS` | `gemini-flash-lite-latest,gemini-2.5-flash,gemini-2.5-flash-lite` / `20000` | Models asked next, in order, when one has not answered in time or is overloaded (HTTP 429/503). A slow or unknown model is skipped for 6 hours, an overloaded one for 3 minutes |
+| `SHORTS_CHECK` | `1` | `0` = do not ask YouTube which videos are Shorts |
 | `LIBRETRANSLATE_URL` / `LIBRETRANSLATE_API_KEY` | – | Or translate with a LibreTranslate server, e.g. `http://libretranslate:5000` |
 | `YTDLP_COOKIES` | – | Path to a cookies.txt, if YouTube asks you to sign in |
 | `YTDLP_ARGS` | – | Extra yt-dlp arguments, e.g. `--extractor-args youtube:player_client=…` |
@@ -161,7 +183,7 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 - **`HTTP Error 429` on subtitles.** YouTube rate limits its *translated* subtitles (`no-en`, `no`)
   hard for servers. Set `GEMINI_API_KEY` (or `LIBRETRANSLATE_URL`): the addon then fetches the original
   track, an ordinary request, and translates it itself. Without one it retries, and if YouTube still
-  refuses, plays the trailer without subtitles and tries again 30 minutes later.
+  refuses, plays the trailer without subtitles and tries again 10 minutes later.
 - **No subtitles on a trailer.** The video has no captions at all (music-only trailers), or you have turned off
   auto-generated subtitles. The trailer still plays. The logs say which track was used.
 - **A trailer is slow to start, or doesn't start.** Build one by hand and read what it says. It

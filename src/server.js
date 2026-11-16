@@ -44,6 +44,7 @@ function json(res, status, body, maxAge = 0) {
 }
 
 const streamMemo = new Memo({ max: 20000 });
+const FLAG = { no: '🇳🇴', da: '🇩🇰', sv: '🇸🇪' };
 
 export async function buildStreams(type, id, config, origin, deps = {}) {
   const trailers = await findTrailers(type, id, config, { tmdbKey: env.tmdbKey, searchBudgetMs: env.searchBudgetMs, ...deps });
@@ -51,15 +52,16 @@ export async function buildStreams(type, id, config, origin, deps = {}) {
   if (trailers.partial) streams.partial = true;
   for (const t of trailers) {
     const title = `${t.label} — ${t.name}`;
+    const flag = FLAG[t.lang] || '🇳🇴';
     if (t.mode === 'no' && config.ytno) {
       // Nothing is added to a Norwegian trailer, so the player can fetch it from YouTube itself.
-      streams.push({ name: '🇳🇴 Trailer', title, ytId: t.videoId });
+      streams.push({ name: `${flag} Trailer`, title, ytId: t.videoId });
       continue;
     }
     const profile = makeProfile(t.mode, config);
     const url = `${origin}/play/${t.videoId}/${profile}/${sign(t.videoId, profile)}.mkv`;
     streams.push({
-      name: t.mode === 'no' ? '🇳🇴 Trailer' : '🇳🇴 Tekstet',
+      name: t.mode === 'no' ? `${flag} Trailer` : '🇳🇴 Tekstet',
       title,
       url,
       behaviorHints: { bingeGroup: `trailers-${t.mode}`, notWebReady: true },
@@ -68,9 +70,16 @@ export async function buildStreams(type, id, config, origin, deps = {}) {
   }
   // What was found, so the log shows which trailers a title was given.
   // One line per title with what was found; the full list at LOG_LEVEL=debug.
-  const norwegian = trailers.filter((t) => t.mode === 'no');
-  const others = trailers.length - norwegian.length;
-  const summary = [norwegian.length ? `Norwegian: ${norwegian.map((t) => `${t.name} [${t.videoId}]`).join('; ')}` : 'no Norwegian trailer', `${others} with translated subtitles`].join(' · ');
+  const list = (lang, word) => {
+    const found = trailers.filter((t) => t.mode === 'no' && (t.lang || 'no') === lang);
+    return found.length ? `${word}: ${found.map((t) => `${t.name}${t.short ? ' (Short)' : ''} [${t.videoId}]`).join('; ')}` : '';
+  };
+  const subbed = trailers.filter((t) => t.mode === 'sub');
+  const nordic = [list('no', 'Norwegian'), list('da', 'Danish'), list('sv', 'Swedish')].filter(Boolean);
+  const summary = [
+    ...(nordic.length ? nordic : ['no Nordic trailer']),
+    `${subbed.length} with translated subtitles${subbed.some((t) => t.short) ? ' (a Short, nothing else exists)' : ''}`,
+  ].join(' · ');
   log.info(`${trailers.film || `${type}/${id}`} (${id}): ${trailers.length ? summary : 'no trailers'}`);
   log.debug(streams.map((st, i) => `  ${i + 1}. ${st.title} [${st.ytId ? `YouTube ${st.ytId}` : 'served by the addon'}]`).join('\n'));
   return streams;
@@ -91,7 +100,7 @@ async function route(req, res) {
   const url = new URL(req.url, 'http://x');
   const parts = url.pathname.split('/').filter(Boolean);
 
-  if (parts[0] === 'health') return json(res, 200, { ok: true, version: pkg.version, norwegianChannels: indexStatus() });
+  if (parts[0] === 'health') return json(res, 200, { ok: true, version: pkg.version, channels: indexStatus() });
 
   // /play/<videoId>/<profile>/<sig>.mkv
   if (parts[0] === 'play' && parts.length === 4) {

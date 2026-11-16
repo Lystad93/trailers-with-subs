@@ -5,7 +5,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { env, log } from './env.js';
-import { getInfo, pickFormats, subtitlePlan, runYtdlp, baseArgs, BOT_CHECK, botCheckHint } from './youtube.js';
+import { getInfo, forgetInfo, pickFormats, subtitlePlan, runYtdlp, baseArgs, BOT_CHECK, botCheckHint } from './youtube.js';
+import { noteShort } from './shorts.js';
 import { translateCues, translatorName } from './translate.js';
 import { vttToSrt, parseVtt, cleanCues, cuesToSrt } from './subtitles.js';
 
@@ -74,7 +75,7 @@ export const cacheKey = (videoId, profile) => `${videoId}_${profile.replace(/[^A
 export const finalPath = (key) => path.join(env.cacheDir, `${key}.mkv`);
 // Marks a trailer built without subtitles because they were not there in time.
 const retryMarker = (key) => path.join(env.cacheDir, `${key}.retry-subs`);
-const SUBS_RETRY_MS = 30 * 60 * 1000;
+const SUBS_RETRY_MS = 10 * 60 * 1000;
 
 // Rebuild as soon as the subtitles have arrived in the cache, else try again after a while.
 async function needsRebuild(key, videoId, profile) {
@@ -121,7 +122,7 @@ export function startJob(videoId, profileStr, profile, deps = {}) {
     const workDir = path.join(env.cacheDir, 'work', `${key}-${Date.now()}`);
     try {
       await fsp.mkdir(workDir, { recursive: true });
-      const { outPath: out, retrySubs } = await buildVideo(videoId, profile, workDir, {
+      const build = (dir) => buildVideo(videoId, profile, dir, {
         ...deps,
         onPlan: (plan) => Object.assign(job, plan),
         onPart: (p) => {
@@ -134,6 +135,16 @@ export function startJob(videoId, profileStr, profile, deps = {}) {
           job.encodeFinished = true;
           job.notify();
         },
+      });
+      const { outPath: out, retrySubs } = await build(workDir).catch(async (err) => {
+        // YouTube's download links sometimes refuse (403) though they are fresh. New links
+        // usually work, as long as no viewer has been given part of the first attempt.
+        if (!/HTTP Error 403/.test(err.message) || job.partPath) throw err;
+        log.warn(`${videoId}: YouTube refused the download (HTTP 403); fetching new links and trying once more`);
+        forgetInfo(videoId);
+        const again = path.join(workDir, 'again');
+        await fsp.mkdir(again, { recursive: true });
+        return build(again);
       });
       job.encodeFinished = true;
       job.notify();
@@ -264,6 +275,8 @@ export async function buildVideo(videoId, profile, workDir, deps = {}) {
     audioLang: profile.mode === 'no' ? /^(no|nb|nn)/ : null,
   });
   if (!picked) throw new Error('no playable formats');
+  const shape = picked.video || picked.muxed;
+  if (shape?.width && shape?.height) noteShort(videoId, shape.height > shape.width); // upright = a Short
   const sources = picked.muxed ? [picked.muxed] : [picked.video, picked.audio];
 
   // Start the downloads now: their pipes fill while the subtitles are fetched and translated.
