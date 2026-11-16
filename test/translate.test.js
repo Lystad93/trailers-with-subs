@@ -69,6 +69,25 @@ test('rate limits are temporary, a bad key is not', async () => {
   await assert.rejects(translateTexts(['a'], bad.fetchImpl), (e) => !e.transient && /API key not valid/.test(e.message));
 });
 
+test('when the main model does not answer in time, the lighter model is used, and kept for a while', async () => {
+  const models = [];
+  const fetchImpl = async (url, opts) => {
+    const model = /models\/([^:]+):/.exec(String(url))[1];
+    models.push(model);
+    if (model === 'gemini-test') {
+      const err = new Error('The operation was aborted due to timeout');
+      err.name = 'TimeoutError';
+      throw err;
+    }
+    const lines = JSON.parse(JSON.parse(opts.body).contents[0].parts[0].text.split('\n').slice(-1)[0]);
+    return reply(lines.map((l) => `NO:${l}`));
+  };
+  assert.deepEqual(await translateTexts(['a'], fetchImpl), ['NO:a']);
+  assert.deepEqual(await translateTexts(['b'], fetchImpl), ['NO:b']);
+  assert.deepEqual([...new Set(models)], ['gemini-test', 'gemini-flash-lite-latest']);
+  assert.equal(models.filter((m) => m === 'gemini-test').length, 1, 'the slow model is not asked again');
+});
+
 test('auto-caption fragments are merged into sentences before translating', () => {
   const cue = (start, end, text) => ({ start, end, lines: [text] });
   const merged = mergeForTranslation([

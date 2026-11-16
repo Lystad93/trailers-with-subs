@@ -81,7 +81,9 @@ test('stream response is what AIOMetadata expects, and links play', async () => 
   assert.equal(parsed.length, 2);
   assert.ok(parsed.every(Boolean));
   assert.equal(parsed[0].title, '🇳🇴 Norsk trailer — DUNE - Offisiell trailer (norsk tekst)');
-  assert.match(parsed[0].url, /\/play\/NOduneNO001\/no\.1080\.h264\/[\w-]{16}\.mkv$/);
+  // A Norwegian trailer needs nothing added: the player fetches it from YouTube itself.
+  assert.equal(parsed[0].ytId, 'NOduneNO001');
+  assert.equal(parsed[0].url, undefined);
   assert.equal(parsed[1].title, '🇬🇧 Engelsk · norsk tekst — Official Main Trailer');
   assert.match(parsed[1].url, /\/play\/n9xhJrPXop4\/sub\.1080\.h264\.soft\.a\/[\w-]{16}\.mkv$/);
   assert.ok(tmdbCalls.every((u) => u.searchParams.get('api_key') === 'server-key'));
@@ -92,7 +94,7 @@ test('stream response is what AIOMetadata expects, and links play', async () => 
 });
 
 test('settings in the URL change the result', async () => {
-  const cfg = encodeConfig({ first: 'sub', yt: true, subs: 'burn', q: 2160, codec: 'any', tmdb: 'user-key' });
+  const cfg = encodeConfig({ first: 'sub', yt: true, ytno: false, subs: 'burn', q: 2160, codec: 'any', tmdb: 'user-key' });
   const { streams } = await (await fetch(`${base}/${cfg}/stream/movie/tt1160419.json`)).json();
   assert.equal(streams.length, 4);
   assert.match(streams[0].url, /sub\.2160\.any\.burn\.a/);

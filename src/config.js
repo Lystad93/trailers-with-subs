@@ -13,6 +13,7 @@ export const DEFAULTS = Object.freeze({
   q: 1080, // max height: 720 | 1080 | 1440 | 2160
   codec: 'h264', // h264 (plays everywhere, max 1080p on YouTube) | any (best VP9/AV1, up to 4K)
   first: 'no', // which group comes first: no | sub
+  ytno: true, // Norwegian trailers as plain YouTube ids: the app plays them straight from YouTube, nothing is downloaded
   yt: false, // also list plain YouTube entries (Stremio's YouTube player, no added subtitles)
 });
 
@@ -53,6 +54,7 @@ export function normalizeConfig(raw) {
     q: QUALITIES.includes(q) ? q : DEFAULTS.q,
     codec: ENUMS.codec.includes(c.codec) ? c.codec : DEFAULTS.codec,
     first: ENUMS.first.includes(c.first) ? c.first : DEFAULTS.first,
+    ytno: bool(c.ytno, DEFAULTS.ytno),
     yt: bool(c.yt, DEFAULTS.yt),
   };
 }

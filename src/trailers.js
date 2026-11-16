@@ -141,6 +141,7 @@ export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searc
   const out = config.first === 'sub' ? [...sub, ...no] : [...no, ...sub];
   // The dub search was skipped or is still running: worth asking again soon.
   if (partial) out.partial = true;
+  out.film = `${data.title}${data.year ? ` (${data.year})` : ''}`;
   return out;
 }
 

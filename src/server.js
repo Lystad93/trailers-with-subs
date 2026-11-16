@@ -50,9 +50,14 @@ export async function buildStreams(type, id, config, origin, deps = {}) {
   const streams = [];
   if (trailers.partial) streams.partial = true;
   for (const t of trailers) {
+    const title = `${t.label} — ${t.name}`;
+    if (t.mode === 'no' && config.ytno) {
+      // Nothing is added to a Norwegian trailer, so the player can fetch it from YouTube itself.
+      streams.push({ name: '🇳🇴 Trailer', title, ytId: t.videoId });
+      continue;
+    }
     const profile = makeProfile(t.mode, config);
     const url = `${origin}/play/${t.videoId}/${profile}/${sign(t.videoId, profile)}.mkv`;
-    const title = `${t.label} — ${t.name}`;
     streams.push({
       name: t.mode === 'no' ? '🇳🇴 Trailer' : '🇳🇴 Tekstet',
       title,
@@ -61,6 +66,9 @@ export async function buildStreams(type, id, config, origin, deps = {}) {
     });
     if (config.yt) streams.push({ name: 'YouTube', title: `${t.label.replace(' · norsk tekst', '')} — ${t.name} (YouTube)`, ytId: t.videoId });
   }
+  // What was found, so the log shows which trailers a title was given.
+  const lines = streams.map((st, i) => `  ${i + 1}. ${st.title} [${st.ytId ? `YouTube ${st.ytId}` : `served by the addon, ${/\/play\/([\w-]{11})\//.exec(st.url)?.[1]}`}]`);
+  log.info(`${type}/${id} ${trailers.film || ''}: ${streams.length ? `${streams.length} trailers\n${lines.join('\n')}` : 'no trailers'}`);
   return streams;
 }
 

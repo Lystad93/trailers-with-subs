@@ -62,9 +62,9 @@ Add channels of your own with `CHANNELS_EXTRA` (channel ids or @handles, comma s
   lists them first. Set *Norwegian* as a subtitle language and the subtitle mode to *Smart* or
   *Always* in the app's playback settings.
 - **Stremio**: plays the links; the subtitle track is on by default.
-- **Nuvio**: does not work. Nuvio only reads YouTube ids from a title's trailers and plays those
-  with its own YouTube player, so it never opens this addon's links. Turning on *Also list the plain
-  YouTube video* at least gives Nuvio the Norwegian dubbed trailers the addon found.
+- **Nuvio**: only the Norwegian trailers. Nuvio reads YouTube ids and plays them with its own
+  YouTube player, so it gets the Norwegian cinema trailers but never opens the addon's own links
+  (the English trailers with translated subtitles).
 
 ## Quick start (Docker)
 
@@ -110,6 +110,7 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 | Setting | Default | |
 |---|---|---|
 | Norwegian trailers | on | Norwegian cinema trailers and dubbed trailers |
+| Play Norwegian trailers straight from YouTube | on | They go out as YouTube ids, so the app fetches them itself and nothing is downloaded; they also work in Nuvio. Off = the server fetches them in the best quality |
 | Use Norwegian distributors' and cinemas' YouTube channels | on | Off = only the Norwegian trailers TMDB lists |
 | English trailers with Norwegian subtitles | on | |
 | Max per group | 2 / 2 | |
@@ -141,6 +142,7 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 | `SUB_FONT` / `SUB_FONT_SIZE` | `DejaVu Sans` / `18` | Burned-in subtitle style (the size is relative to a 288-line canvas) |
 | `GEMINI_API_KEY` | – | Translate subtitles with Google Gemini (key from aistudio.google.com; the same key AIOMetadata uses works). Strongly recommended on a VPS: YouTube rate limits its own translations for servers |
 | `GEMINI_MODEL` | `gemini-flash-latest` | Gemini model for translation |
+| `GEMINI_FALLBACK_MODEL` / `GEMINI_TIMEOUT_MS` | `gemini-flash-lite-latest` / `20000` | The model asked instead when the main one has not answered in time or is overloaded; it is then used first for 6 hours |
 | `LIBRETRANSLATE_URL` / `LIBRETRANSLATE_API_KEY` | – | Or translate with a LibreTranslate server, e.g. `http://libretranslate:5000` |
 | `YTDLP_COOKIES` | – | Path to a cookies.txt, if YouTube asks you to sign in |
 | `YTDLP_ARGS` | – | Extra yt-dlp arguments, e.g. `--extractor-args youtube:player_client=…` |
@@ -170,7 +172,11 @@ TMDB_API_KEY=… BASE_URL=http://192.168.1.10:7000 npm start
 - **The first play has no subtitles, the second has.** The subtitles took longer than `SUB_WAIT_MS`.
 - **Subtitles don't show in the AIOStreams app.** Add Norwegian to the app's subtitle languages; with
   the mode *Only forced* or *None* the track is not shown.
-- **Changes don't show up.** AIOMetadata caches trailer lists for 24 hours (`TRAILER_ADDON_TTL`).
+- **Which trailers did a title get?** The log lists them each time AIOMetadata asks: the heading,
+  and whether it is a YouTube id or served by the addon. No line for a title means AIOMetadata
+  answered from its own cache and never asked.
+- **Changes don't show up.** AIOMetadata caches trailer lists for 24 hours (`TRAILER_ADDON_TTL`), per
+  manifest URL. Changing any setting gives a new URL and so a fresh start.
 - **Lots of requests when AIOMetadata starts.** Its catalog warm-up asks about every title at once. TMDB
   calls are queued and rate limited, and when TMDB still fails the addon answers with an error
   (503), so AIOMetadata asks again later instead of keeping an empty list for a day.

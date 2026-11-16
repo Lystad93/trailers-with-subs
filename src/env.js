@@ -74,6 +74,9 @@ export const env = {
   // Translate subtitles ourselves instead of asking YouTube (whose translations are rate limited).
   geminiKey: (process.env.GEMINI_API_KEY || '').trim(),
   geminiModel: (process.env.GEMINI_MODEL || 'gemini-flash-latest').trim(),
+  // Asked instead when the main model is too slow or overloaded. Empty turns the fallback off.
+  geminiFallbackModel: (process.env.GEMINI_FALLBACK_MODEL ?? 'gemini-flash-lite-latest').trim(),
+  geminiTimeoutMs: num(process.env.GEMINI_TIMEOUT_MS, 20000),
   libreUrl: (process.env.LIBRETRANSLATE_URL || '').trim(),
   libreKey: (process.env.LIBRETRANSLATE_API_KEY || '').trim(),
 };

@@ -57,17 +57,20 @@ export function wrapText(text, width = 42) {
   return best ? best.lines : [clean];
 }
 
-async function postJson(url, body, headers, fetchImpl) {
+async function postJson(url, body, headers, fetchImpl, timeoutMs = 60000) {
   let res;
   try {
     res = await fetchImpl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json', ...headers },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    throw new TranslateError(`translation request failed: ${err.message}`, true);
+    const timedOut = err.name === 'TimeoutError' || /timeout|aborted/i.test(err.message);
+    const failure = new TranslateError(timedOut ? `no answer within ${Math.round(timeoutMs / 1000)}s` : `translation request failed: ${err.message}`, true);
+    failure.timedOut = timedOut;
+    throw failure;
   }
   if (!res.ok) {
     const transient = res.status === 429 || res.status >= 500;
@@ -101,39 +104,30 @@ const THINKING = [
   { name: 'low', config: { thinkingLevel: 'low' } },
   { name: 'model default', config: null },
 ];
-let thinking = 0;
+const thinkingFor = new Map(); // model → index into THINKING
 
-async function geminiRequest(url, body, fetchImpl) {
+async function geminiRequest(model, body, fetchImpl, timeoutMs) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const headers = { 'x-goog-api-key': env.geminiKey };
-  for (let i = thinking; ; i++) {
+  for (let i = thinkingFor.get(model) ?? 0; ; i++) {
     const { config } = THINKING[i];
     const request = config ? { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: config } } : body;
     try {
-      const data = await postJson(url, request, headers, fetchImpl);
-      thinking = i;
-      return data;
+      const data = await postJson(url, request, headers, fetchImpl, timeoutMs);
+      thinkingFor.set(model, i);
+      return { data, thinking: THINKING[i].name };
     } catch (err) {
       if (err.status !== 400 || i === THINKING.length - 1) throw err;
+      log.debug(`Gemini (${model}) refused thinking "${THINKING[i].name}": ${err.message}`);
     }
   }
 }
 
-async function gemini(texts, fetchImpl, context) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.geminiModel)}:generateContent`;
-  const prompt = (context ? `Trailer: ${context}\n` : '') + `Lines (${texts.length}):\n${JSON.stringify(texts)}`;
-  const body = {
-    systemInstruction: { parts: [{ text: GEMINI_INSTRUCTIONS }] },
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.2,
-      responseMimeType: 'application/json',
-      responseSchema: { type: 'ARRAY', items: { type: 'STRING' } },
-    },
-  };
-  // A model sometimes returns the wrong number of lines: ask once more before giving up.
+// One model, one batch. A model sometimes returns the wrong number of lines: ask once more.
+async function geminiWith(model, texts, body, fetchImpl, timeoutMs) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const started = Date.now();
-    const data = await geminiRequest(url, body, fetchImpl);
+    const { data, thinking } = await geminiRequest(model, body, fetchImpl, timeoutMs);
     const candidate = data?.candidates?.[0];
     const text = (candidate?.content?.parts || []).map((p) => p.text || '').join('');
     let parsed = null;
@@ -144,7 +138,7 @@ async function gemini(texts, fetchImpl, context) {
     }
     if (Array.isArray(parsed) && parsed.length === texts.length && parsed.every((t) => typeof t === 'string')) {
       const thoughts = data?.usageMetadata?.thoughtsTokenCount;
-      log.info(`Gemini (${env.geminiModel}) translated ${texts.length} lines in ${((Date.now() - started) / 1000).toFixed(1)}s (thinking: ${THINKING[thinking].name}${thoughts ? `, ${thoughts} thinking tokens` : ''})`);
+      log.info(`Gemini (${model}) translated ${texts.length} lines in ${((Date.now() - started) / 1000).toFixed(1)}s (thinking: ${thinking}${thoughts ? `, ${thoughts} thinking tokens` : ''})`);
       return parsed;
     }
     if (attempt === 2) {
@@ -153,6 +147,34 @@ async function gemini(texts, fetchImpl, context) {
     }
   }
   return null;
+}
+
+// When the main model does not answer in time, the lighter fallback model is asked instead, and
+// used first for the next hours.
+let preferFallbackUntil = 0;
+
+async function gemini(texts, fetchImpl, context) {
+  const prompt = (context ? `Trailer: ${context}\n` : '') + `Lines (${texts.length}):\n${JSON.stringify(texts)}`;
+  const body = {
+    systemInstruction: { parts: [{ text: GEMINI_INSTRUCTIONS }] },
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.2,
+      responseMimeType: 'application/json',
+      responseSchema: { type: 'ARRAY', items: { type: 'STRING' } },
+    },
+  };
+  const fallback = env.geminiFallbackModel && env.geminiFallbackModel !== env.geminiModel ? env.geminiFallbackModel : null;
+  if (fallback && Date.now() < preferFallbackUntil) return geminiWith(fallback, texts, body, fetchImpl, env.geminiTimeoutMs * 2);
+  try {
+    return await geminiWith(env.geminiModel, texts, body, fetchImpl, env.geminiTimeoutMs);
+  } catch (err) {
+    if (!fallback || !(err.timedOut || err.status === 429 || err.status >= 500)) throw err;
+    log.warn(`Gemini (${env.geminiModel}): ${err.message}; using ${fallback} instead, also for the next 6 hours`);
+    const out = await geminiWith(fallback, texts, body, fetchImpl, env.geminiTimeoutMs * 2);
+    preferFallbackUntil = Date.now() + 6 * 60 * 60 * 1000;
+    return out;
+  }
 }
 
 async function libre(texts, fetchImpl) {
