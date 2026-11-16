@@ -122,7 +122,7 @@ export async function findTrailers(type, id, config, { tmdbKey, fetchImpl, searc
     const langs = ['en', data.originalLanguage].filter((l, i, a) => l && !NO_LANGS.has(l) && a.indexOf(l) === i);
     let pool = ranked.filter((v) => langs.includes(v.iso_639_1));
     if (!pool.length) pool = ranked.filter((v) => !v.iso_639_1);
-    // Original-language trailers first for non-English films, then English.
+    // English trailers first, then the ones in the film's own language; best ranked first within each.
     pool.sort((a, b) => langs.indexOf(a.iso_639_1) - langs.indexOf(b.iso_639_1) || ranked.indexOf(a) - ranked.indexOf(b));
     sub = pool
       .filter((v) => !no.some((n) => n.videoId === v.key))
