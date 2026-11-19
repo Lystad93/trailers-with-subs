@@ -101,16 +101,22 @@ const TEXTED = /norsk\s*tekst|(?<!u)tekstet|undertekster|svensk\s*text|\b(swe|se
 const UNTEXTED = /utekstet|uten\s+tekst/i;
 const NOT_A_TRAILER = /\b(featurette|bak kulissene|behind the scenes|intervju|interview|klipp|clip|musikkvideo|lyric|premierefest|reaction)\b/i;
 
-/** Does this channel video show a trailer for a film with one of these names? */
-export function matchesFilm(videoTitle, names) {
+// The film names a channel video can stand for: the whole title without the trailer wording, and
+// its first part ("Name | …"). None when it is not a trailer.
+function videoNames(videoTitle) {
   const title = String(videoTitle || '');
-  if (!TRAILER.test(title) || NOT_A_TRAILER.test(title)) return false;
-  const wanted = names.map((n) => filmNameOf(n) || normalizeTitle(n)).filter((n) => n.length >= 2);
-  if (!wanted.length) return false;
-  // Either the whole title is the name plus trailer wording, or its first part is ("Name | …").
+  if (!TRAILER.test(title) || NOT_A_TRAILER.test(title)) return [];
   const whole = filmNameOf(title);
   const head = filmNameOf(title.split(/\s[|–—-]\s|\s*\|\s*/)[0]);
-  return wanted.some((n) => n === whole || n === head);
+  return [...new Set([whole, head])].filter(Boolean);
+}
+
+const wantedNames = (names) => [...new Set(names.map((n) => filmNameOf(n) || normalizeTitle(n)).filter((n) => n.length >= 2))];
+
+/** Does this channel video show a trailer for a film with one of these names? */
+export function matchesFilm(videoTitle, names) {
+  const wanted = wantedNames(names);
+  return wanted.length > 0 && videoNames(videoTitle).some((n) => wanted.includes(n));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -124,6 +130,27 @@ const indexFile = () => path.join(env.cacheDir, 'channels.json');
 export function setIndexForTests(next) {
   index = next;
   loaded = true;
+  byName = null;
+}
+
+// film name → [{ channelId, video }]. Working out a video's name takes a dozen regular
+// expressions; doing that for every listed video on every request kept the server busy for
+// seconds during AIOMetadata's catalog warm-ups. It is done once, when the lists change.
+let byName = null;
+
+function nameIndex() {
+  if (byName) return byName;
+  byName = new Map();
+  for (const [channelId, channel] of Object.entries(index.channels)) {
+    for (const video of channel.videos) {
+      for (const name of videoNames(video.title)) {
+        let list = byName.get(name);
+        if (!list) byName.set(name, (list = []));
+        list.push({ channelId, video });
+      }
+    }
+  }
+  return byName;
 }
 
 export function indexStatus() {
@@ -141,6 +168,7 @@ async function loadIndex() {
   try {
     const data = JSON.parse(await fsp.readFile(indexFile(), 'utf8'));
     if (data && typeof data.channels === 'object') index = data;
+    byName = null;
   } catch {
     /* first run */
   }
@@ -192,6 +220,7 @@ export function refreshChannels({ gapMs = 5000, list = listChannel, onlyMissing 
         const complete = deep && fresh.videos.length >= had.length * 0.8;
         const videos = complete ? fresh.videos : [...fresh.videos, ...had.filter((v) => !seen.has(v.id))];
         index.channels[channel.id] = { name: fresh.name, fetchedAt: Date.now(), deepAt: complete ? Date.now() : known?.deepAt || 0, videos };
+        byName = null;
         await saveIndex();
       } catch (err) {
         failed++;
@@ -217,6 +246,7 @@ export async function startChannelIndex() {
   await loadIndex();
   const status = indexStatus();
   if (status.videos) log.info(`Nordic cinema channels: ${status.videos} videos from ${status.channels} channels on file`);
+  nameIndex();
   const run = () => refreshChannels().catch((err) => log.warn(`channel refresh: ${err.message}`));
   const age = status.refreshed ? Date.now() - Date.parse(status.refreshed) : Infinity;
   const every = env.channelRefreshHours * 60 * 60 * 1000;
@@ -247,28 +277,29 @@ export function findChannelTrailers(data, { preferDubbed = false, nordic = true 
   const released = data.date ? Date.parse(data.date) : NaN;
   const found = [];
   const configured = new Map(configuredChannels().flatMap((c) => [[c.id, c], [c.name, c]]));
-  for (const [id, channel] of Object.entries(index.channels)) {
+  const hits = wantedNames(names).flatMap((n) => nameIndex().get(n) || []);
+  for (const { channelId: id, video: v } of hits) {
+    const channel = index.channels[id];
+    if (!channel) continue;
     const setup = configured.get(id) || configured.get(channel.name) || {};
     const lang = setup.lang || 'no';
     if (lang !== 'no' && !nordic) continue;
-    for (const v of channel.videos) {
-      if (v.duration && (v.duration < 25 || v.duration > 330)) continue; // ten-second spots, full films
-      if (!matchesFilm(v.title, names) || UNTEXTED.test(v.title)) continue;
-      const dubbed = DUBBED.test(v.title);
-      if (dubbed && lang !== 'no') continue; // Danish or Swedish voices are no help
-      if (setup.marked && !dubbed && !TEXTED.test(v.title)) continue;
-      if (data.tmdbType !== 'movie' && /på kino|i kinoene|kinopremiere|i biografen|på bio|biopremiär/i.test(v.title)) continue; // a cinema film, not the series
-      if (v.ts && !Number.isNaN(released)) {
-        const at = v.ts * 1000;
-        // A film's trailer comes out within a year and a half of it, either side (festival films
-        // reach the Nordics late). For a series only its launch counts: a later cinema film often
-        // shares the name.
-        const [before, after] = data.tmdbType === 'movie' ? [550, 550] : [365, 365];
-        if (at < released - before * DAY || at > released + after * DAY) continue;
-      }
-      if (found.some((f) => f.id === v.id)) continue;
-      found.push({ ...v, channel: channel.name, lang, dubbed, texted: TEXTED.test(v.title), teaser: /teaser/i.test(v.title) });
+    if (v.duration && (v.duration < 25 || v.duration > 330)) continue; // ten-second spots, full films
+    if (UNTEXTED.test(v.title)) continue;
+    const dubbed = DUBBED.test(v.title);
+    if (dubbed && lang !== 'no') continue; // Danish or Swedish voices are no help
+    if (setup.marked && !dubbed && !TEXTED.test(v.title)) continue;
+    if (data.tmdbType !== 'movie' && /på kino|i kinoene|kinopremiere|i biografen|på bio|biopremiär/i.test(v.title)) continue; // a cinema film, not the series
+    if (v.ts && !Number.isNaN(released)) {
+      const at = v.ts * 1000;
+      // A film's trailer comes out within a year and a half of it, either side (festival films
+      // reach the Nordics late). For a series only its launch counts: a later cinema film often
+      // shares the name.
+      const [before, after] = data.tmdbType === 'movie' ? [550, 550] : [365, 365];
+      if (at < released - before * DAY || at > released + after * DAY) continue;
     }
+    if (found.some((f) => f.id === v.id)) continue;
+    found.push({ ...v, channel: channel.name, lang, dubbed, texted: TEXTED.test(v.title), teaser: /teaser/i.test(v.title) });
   }
   // Norwegian first, then Danish, then Swedish; within a language trailers before teasers.
   return found.sort(
